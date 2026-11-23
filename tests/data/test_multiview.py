@@ -185,6 +185,111 @@ def test_k1_only_is_bitwise_the_study():
     assert torch.equal(uv, uv_s) and torch.equal(z, z_s)
 
 
+# calibrat3's default lens model (fx, fy, cx, cy, k1, k2), fitted to four DoublePoke
+# cameras on 2026-05-06: fx != fy, lens centres off the sensor centre, and strong barrel
+# distortion that a positive k2 bends back near the corners.
+CALIBRAT3_LENSES = [
+    ((822.91, 822.35, 641.21, 521.36), (-0.4006, 0.2074)),
+    ((827.07, 827.28, 659.14, 522.20), (-0.4078, 0.2344)),
+    ((826.84, 827.32, 646.78, 519.13), (-0.3780, 0.1501)),
+    ((815.74, 815.62, 615.65, 512.77), (-0.4027, 0.2019)),
+]
+
+
+def _calibrat3_cameras():
+    """``make_cameras``' ring with calibrat3's two-term lenses on 1280 x 1024 sensors."""
+    out = []
+    ring = make_cameras(4, size=(1280, 1024), focal=820.0, seed=11)
+    for c, ((fx, fy, cx, cy), (k1, k2)) in zip(ring, CALIBRAT3_LENSES):
+        K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1.0]])
+        out.append(
+            sio.Camera(
+                matrix=K,
+                dist=np.array([k1, k2, 0, 0, 0]),
+                size=c.size,
+                rvec=c.rvec,
+                tvec=c.tvec,
+                name=c.name,
+            )
+        )
+    return out
+
+
+def test_two_term_lens_over_the_whole_image():
+    """calibrat3's k1 + k2 lenses: exact projection and undistortion, corners included.
+
+    Every pixel of a 1280 x 1024 grid is undistorted, placed at a depth in front of the
+    camera and projected back (NumPy, torch and OpenCV). With the study's 20 steps
+    alone the corners stay up to about 0.05 px off; the continued iteration settles them.
+    """
+    sio_cams = _calibrat3_cameras()
+    cams = MV.CameraArrays.from_cameras(sio_cams)
+    u, v = np.meshgrid(np.arange(0, 1280, 16.0), np.arange(0, 1024, 16.0))
+    grid = np.concatenate(
+        [
+            np.stack([u, v], -1).reshape(-1, 2),
+            [[0, 0], [1279, 0], [0, 1023], [1279, 1023]],
+        ]
+    )
+    depth = np.random.default_rng(0).uniform(300, 900, (len(grid), 1))
+    T = cams.to_torch(dtype=torch.float64)
+    worst_20 = 0.0
+    for i in range(len(sio_cams)):
+        xn = MV.np_undistort(grid, cams.K[i], cams.dist[i])
+        ref = cv2.undistortPointsIter(
+            grid.reshape(-1, 1, 2),
+            cams.K[i],
+            cams.dist[i],
+            None,
+            None,
+            (cv2.TERM_CRITERIA_COUNT | cv2.TERM_CRITERIA_EPS, 500, 1e-15),
+        ).reshape(-1, 2)
+        assert np.abs(xn - ref).max() < 1e-9
+        Xw = (np.c_[xn, np.ones(len(xn))] * depth - cams.t[i]) @ cams.R[i]
+        back = MV.np_project(Xw, cams.K[i], cams.dist[i], cams.R[i], cams.t[i])
+        assert np.abs(back - grid).max() < 1e-6
+        cv_back = cv_project(sio_cams[i], Xw)
+        assert np.abs(cv_back - grid).max() < 1e-6
+        uv_t, _ = MV.project_points(
+            torch.as_tensor(Xw)[None],
+            T["K"][None, i : i + 1],
+            T["dist"][None, i : i + 1],
+            T["R"][None, i : i + 1],
+            T["t"][None, i : i + 1],
+        )
+        assert np.abs(uv_t[0, 0].numpy() - grid).max() < 1e-6
+        x20 = MV.np_undistort(grid, cams.K[i], cams.dist[i], max_iters=20)
+        b20 = MV.np_project(
+            np.c_[x20, np.ones(len(x20))],
+            cams.K[i],
+            cams.dist[i],
+            np.eye(3),
+            np.zeros(3),
+        )
+        worst_20 = max(worst_20, np.abs(b20 - grid).max())
+    assert worst_20 > 0.01  # why the iteration continues past the study's 20 steps
+
+
+def test_two_term_lens_triangulation():
+    """calibrat3's k1 + k2 lenses: the robust DLT recovers points anywhere in view."""
+    cams = MV.CameraArrays.from_cameras(_calibrat3_cameras())
+    X = random_poses(40, seed=12, spread=300.0).reshape(-1, 3)
+    uv = np.stack(
+        [
+            MV.np_project(X, cams.K[v], cams.dist[v], cams.R[v], cams.t[v])
+            for v in range(4)
+        ],
+        1,
+    )
+    inside = (uv >= 0).all(-1) & (uv[..., 0] <= 1279) & (uv[..., 1] <= 1023)
+    uv[~inside] = np.nan
+    keep = inside.sum(1) >= 2
+    tr = MV.robust_triangulate(uv[keep], cams)
+    assert np.abs(tr.X - X[keep]).max() < 1e-6
+    assert np.nanmax(tr.err) < 1e-6
+    assert np.array_equal(tr.nview, inside[keep].sum(1))
+
+
 # ---------------------------------------------------------------------------------------
 # Cube and unprojection
 # ---------------------------------------------------------------------------------------

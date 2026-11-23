@@ -374,18 +374,32 @@ def np_project(
 
 
 def np_undistort(
-    uv: np.ndarray, K: np.ndarray, dist: np.ndarray, iters: int = 20
+    uv: np.ndarray,
+    K: np.ndarray,
+    dist: np.ndarray,
+    iters: int = 20,
+    max_iters: int = 200,
+    tol: float = 1e-12,
 ) -> np.ndarray:
     """Distorted pixels to undistorted normalised coordinates (fixed-point iteration).
 
-    OpenCV's ``undistortPoints`` iteration with 20 steps. With only ``k1`` set it is
-    bitwise the study's ``x = xd / (1 + k1 |x|^2)``.
+    OpenCV's ``undistortPoints`` iteration. The first ``iters`` steps are the study's;
+    with only ``k1`` set they are bitwise its ``x = xd / (1 + k1 |x|^2)``.
+
+    Strong two-term lenses converge more slowly near the image corners. On calibrat3's
+    ``fx, fy, cx, cy, k1, k2`` fits of the DoublePoke cameras (``k1`` about -0.40,
+    ``k2`` about +0.22), 20 steps leave up to 0.05 px there. So a point whose next step
+    still moves it by more than ``tol`` (normalised units) keeps iterating, up to
+    ``max_iters`` steps in all. A point that had settled keeps its ``iters``-step value
+    exactly, and so does one that never settles (outside the lens model's range).
 
     Args:
         uv: ``(..., 2)`` distorted pixels (NaN passes through).
         K: ``(3, 3)`` intrinsics.
         dist: ``(5,)`` distortion (or a scalar ``k1``).
-        iters: Iterations.
+        iters: Steps taken for every point (the study's 20).
+        max_iters: Most steps for a point still moving after ``iters``.
+        tol: A step smaller than this counts as settled.
 
     Returns:
         ``(..., 2)`` normalised coordinates.
@@ -394,15 +408,34 @@ def np_undistort(
     xd = np.stack(
         [(uv[..., 0] - K[0, 2]) / K[0, 0], (uv[..., 1] - K[1, 2]) / K[1, 1]], -1
     )
-    x = xd.copy()
-    for _ in range(iters):
+
+    def step(x: np.ndarray, xd: np.ndarray) -> np.ndarray:
         r2 = (x**2).sum(-1, keepdims=True)
         radial = 1 + r2 * (k1 + r2 * (k2 + r2 * k3))
         xx, yy = x[..., 0:1], x[..., 1:2]
         dx = 2 * p1 * xx * yy + p2 * (r2 + 2 * xx * xx)
         dy = p1 * (r2 + 2 * yy * yy) + 2 * p2 * xx * yy
-        x = (xd - np.concatenate([dx, dy], -1)) / radial
-    return x
+        return (xd - np.concatenate([dx, dy], -1)) / radial
+
+    x = xd.copy()
+    for _ in range(iters):
+        x = step(x, xd)
+    if max_iters <= iters:
+        return x
+    shape = x.shape
+    x, xd = x.reshape(-1, 2), xd.reshape(-1, 2)
+    settled = x.copy()
+    idx = np.arange(len(x))
+    with np.errstate(invalid="ignore", over="ignore", divide="ignore"):
+        for _ in range(max_iters - iters):
+            nxt = step(x[idx], xd[idx])
+            moving = np.abs(nxt - x[idx]).max(-1) > tol  # NaN is not moving
+            idx = idx[moving]
+            if not len(idx):
+                break
+            x[idx] = nxt[moving]
+    x[idx] = settled[idx]  # never settled: the study's value
+    return x.reshape(shape)
 
 
 def _dist5(dist) -> Tuple[float, float, float, float, float]:
