@@ -153,6 +153,7 @@ nav:
     - Evaluation: guides/evaluation.md
     - Tracking: guides/tracking.md
     - Embedding (re-ID) Tracking: guides/embedding-tracking.md
+    - Volumetric 3D (multi-camera): guides/volumetric-3d.md
     - Export: guides/export.md
   - Reference:
     - Overview: reference/overview.md

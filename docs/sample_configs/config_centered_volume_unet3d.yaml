@@ -1,0 +1,77 @@
+# Volumetric 3D model (`centered_volume`) on a multi-camera rig.
+#
+# Trains a 3D UNet over a trained, frozen centered-instance model's confidence maps,
+# unprojected into a cube around each animal. Training data: .slp files with recording
+# sessions (calibrated cameras + their videos) whose frame groups hold instance groups.
+# The defaults are the 2026-11 volumetric study's recipe (SLAP: 8,000 steps of 8 animals,
+# about 85 A100-minutes). See docs/guides/volumetric-3d.md.
+
+data_config:
+  train_labels_path:
+    - sessions_train.slp            # .slp files with recording sessions
+  val_labels_path: null             # null: the last validation_fraction of each session, by time
+  validation_fraction: 0.2
+  multiview:
+    target_source: auto             # instance_3d when set, else the robust DLT of the group's 2D
+    up: null                        # [x, y, z] floor normal; null: session metadata, else fitted
+    up_fit_nodes: null              # floor-touching nodes for that fit, e.g. [TailTip]
+    min_views: 2                    # a triangulated target node needs 2 cameras...
+    max_reproj_px: 10.0             # ...and a mean reprojection error below 10 px
+    min_nodes: 6                    # an animal-frame trains with at least 6 target nodes
+    cache_frames: memory            # every needed frame held JPEG-encoded in RAM
+    val_samples: 3000
+  use_augmentations_train: true
+  augmentation_config:
+    volume:
+      jitter: auto                  # 3.9 % of the cube side (15 of 384)
+      random_yaw: true
+      tilt_degrees: 0.0
+      view_dropout: 0.15
+      min_views: 2
+      max_views: null               # e.g. 8 on a 17-camera rig
+      photometric: 0.15
+
+model_config:
+  backbone_config:
+    unet3d:
+      filters: 32
+      filters_rate: 2.0
+      max_stride: 8                 # 3 down blocks
+      norm: group
+      convs_per_block: 2
+  head_configs:
+    centered_volume:
+      volume:
+        centered_instance_model: models/centered_instance   # trained, frozen; referenced by sha256
+        part_names: null            # null: the 2D model's parts that have 3D targets
+        center_nodes: null          # null: the 2D model's anchor_part ([Neck, TTI] for an added Center)
+        n_voxels: 96
+        cube_size: auto             # 2 x the 99th-percentile reach of any node; written back
+        ce_weight: 1.0
+        ce_sigma_voxels: 1.5
+        weight_decay: 1.0e-4
+        grad_clip_norm: 1.0
+        image_decode: full          # full: sleap-nn's own top-down crops; reduced: the study's
+        output_stride: 1
+
+trainer_config:
+  train_data_loader:
+    batch_size: 8
+    num_workers: auto
+  val_data_loader:
+    batch_size: 8
+    num_workers: 2
+  trainer_accelerator: auto
+  max_epochs: 16                    # 16 x 500 = the study's 8,000 steps
+  train_steps_per_epoch: 500
+  optimizer_name: AdamW
+  optimizer:
+    lr: 3.0e-4
+  lr_scheduler:
+    cosine_annealing_warmup:        # stepped every step: 500 warmup steps, then cosine
+      warmup_epochs: 1
+  early_stopping:
+    stop_training_on_plateau: false
+  save_ckpt: true
+  ckpt_dir: models
+  run_name: centered_volume

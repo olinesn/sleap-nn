@@ -631,6 +631,9 @@ class CenteredVolumeDataset(torch.utils.data.Dataset):
         self.input_scale = input_scale
         self.cache_frames = cache_frames
         self.cache: Dict[Tuple[int, int], FrameStore] = {}
+        # without a cache, the frames of the last frame index read (several animals
+        # share a frame: each camera frame is decoded once, not once per animal)
+        self._last: Dict[Tuple[int, int], List[Optional[np.ndarray]]] = {}
         if cache_frames == "memory":
             self._fill_cache(jpeg_quality)
 
@@ -683,7 +686,13 @@ class CenteredVolumeDataset(torch.utils.data.Dataset):
         d = S.data
         f = int(d.frame_idx[r])
         V = d.cameras.n_views
-        imgs = [self._frame(si, v, f) for v in range(V)]
+        if self.cache_frames == "memory":
+            imgs = [self._frame(si, v, f) for v in range(V)]
+        else:
+            imgs = self._last.get((si, f))
+            if imgs is None:
+                imgs = [self._frame(si, v, f) for v in range(V)]
+                self._last = {(si, f): imgs}
         ok = np.array([im is not None for im in imgs])
         shapes = [im.shape[1:] for im in imgs if im is not None]
         H = max((s[0] for s in shapes), default=1)

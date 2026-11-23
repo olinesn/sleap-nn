@@ -40,6 +40,16 @@ resolution; inference collapses to a single-node `'centroid'` skeleton. See the
 |--------|----------|-------|
 | [centroid_unet_standalone](https://github.com/talmolab/sleap-nn/blob/main/docs/sample_configs/config_centroid_unet_standalone.yaml) | UNet | Standalone, full-res, NOT top-down stage-1 |
 
+### Volumetric 3D (multi-camera)
+
+A 3D UNet over a trained, frozen centered-instance model's maps, unprojected into a
+cube per animal across calibrated cameras. Trains on `.slp` files with recording
+sessions. See the [Volumetric 3D guide](../guides/volumetric-3d.md).
+
+| Config | Backbone | Notes |
+|--------|----------|-------|
+| [centered_volume_unet3d](https://github.com/talmolab/sleap-nn/blob/main/docs/sample_configs/config_centered_volume_unet3d.yaml) | 3D UNet | After a centered-instance model; the 2026-11 study's recipe |
+
 ### Bottom-Up
 
 Single-stage multi-instance.
