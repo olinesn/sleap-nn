@@ -528,10 +528,12 @@ def _time_block_split(data: MV.SessionData, rows: np.ndarray, fraction: float):
 def _auto_cube_size(
     sessions: List[VolumeSession], rows: List[np.ndarray], n: int
 ) -> float:
-    """Twice the largest per-node 99th-percentile distance from the centre.
+    """``cube_size: auto``: twice the largest per-node 99th-percentile distance from the centre.
 
-    Rounded up to a voxel of a tenth of a world unit, which gives the study's cubes
-    (SLAP: tail tip 189 at p99 -> 384 = 96 x 4.0).
+    Rounded up to a voxel of a tenth of a world unit. This is not the study's rule: on
+    its training samples it gives SLAP 412.8 (the study used 384) and DoublePoke 268.8
+    (249.6), the tail tip setting it every time. The Euclidean reach also overstates
+    what the loss needs (its inside test is per axis in the yawed floor frame).
     """
     d_all = []
     for S, r in zip(sessions, rows):

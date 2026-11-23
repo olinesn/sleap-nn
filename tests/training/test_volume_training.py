@@ -50,6 +50,7 @@ def _config(tmp_path, train_path, **head):
         "centered_instance_model": CI_DIR,
         "center_nodes": ["A", "B"],
         "n_voxels": 16,
+        "cube_size": "auto",
         "ce_sigma_voxels": 1.5,
     }
     vol.update(head)
@@ -96,13 +97,24 @@ def test_config_validation():
         "model_config": {
             "backbone_config": {"unet3d": {}},
             "head_configs": {
-                "centered_volume": {"volume": {"centered_instance_model": "ci"}}
+                "centered_volume": {
+                    "volume": {"centered_instance_model": "ci", "cube_size": 384.0}
+                }
             },
         },
     }
     cfg = verify_training_cfg(OmegaConf.create(base))
     vol = cfg.model_config.head_configs.centered_volume.volume
-    assert vol.cube_size == "auto" and vol.n_voxels == 96 and vol.ce_weight == 1.0
+    assert vol.cube_size == 384.0 and vol.n_voxels == 96 and vol.ce_weight == 1.0
+    assert cfg.data_config.multiview is None  # filled with defaults at training
+    # the cube side must be given (or "auto")
+    bad = OmegaConf.create(base)
+    bad.model_config.head_configs.centered_volume.volume.cube_size = None
+    with pytest.raises(ValueError, match="cube_size must be set"):
+        verify_training_cfg(bad)
+    ok = OmegaConf.create(base)
+    ok.model_config.head_configs.centered_volume.volume.cube_size = "auto"
+    verify_training_cfg(ok)
     assert cfg.model_config.backbone_config.unet3d.max_stride == 8
     # the backbone and head only go together
     bad = OmegaConf.create(base)
@@ -141,7 +153,12 @@ def test_get_train_val_datasets_refuses_volume():
                 "model_config": {
                     "backbone_config": {"unet3d": {}},
                     "head_configs": {
-                        "centered_volume": {"volume": {"centered_instance_model": "ci"}}
+                        "centered_volume": {
+                            "volume": {
+                                "centered_instance_model": "ci",
+                                "cube_size": 384.0,
+                            }
+                        }
                     },
                 },
             }
@@ -177,7 +194,8 @@ def test_time_block_split_and_auto_cube_size():
     assert set(d.frame_idx[va]) == {8, 9} and set(d.frame_idx[tr]) == set(range(8))
     tr, va = TV._time_block_split(d, rows, 0.0)
     assert len(va) == 0 and len(tr) == 20
-    # SLAP's case: the far node reaches 189 units at the 99th percentile -> 384
+    # synthetic: the far node reaches 189 units at the 99th percentile -> 2 x 189 = 378,
+    # a voxel of 3.94 rounded up to 4.0 -> 384
     rng = np.random.default_rng(0)
     X = np.zeros((2000, 2, 3))
     X[:, 1, 0] = rng.uniform(0, 189 / 0.99, 2000)

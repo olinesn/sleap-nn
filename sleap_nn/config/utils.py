@@ -132,6 +132,12 @@ def check_volume_config(config: DictConfig) -> None:
             "model_config.head_configs.centered_volume.volume.centered_instance_model "
             "must name the trained centered-instance model folder the volume reads."
         )
+    if vol.cube_size is None:
+        raise ValueError(
+            "model_config.head_configs.centered_volume.volume.cube_size must be set: the "
+            "cube side in world units (the study: 384 on SLAP, about 236 mm; 249.6 mm on "
+            "DoublePoke), or 'auto' (untested; larger than the study's cubes)."
+        )
     max_stride = config.model_config.backbone_config.unet3d.max_stride
     if vol.n_voxels % max_stride:
         raise ValueError(

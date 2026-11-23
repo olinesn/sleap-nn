@@ -474,8 +474,9 @@ class MultiviewConfig:
             JPEG-encoded in RAM (frames already stored as JPEG keep their bytes);
             ``"none"``: read from the videos at every step. *Default*: ``"memory"``.
         jpeg_quality: (int) Quality of the cached JPEGs. *Default*: ``95``.
-        val_samples: (int) Validation animal-frames scored each epoch (a fixed random
-            subset); ``None``: all. *Default*: ``3000``.
+        val_samples: (int) Validation animal-frames scored each epoch: the first N of a
+            seed-0 permutation of the validation samples (the study's ``eval_n``, whose
+            reference numbers are on 1,000); ``None``: all. *Default*: ``1000``.
     """
 
     target_source: str = field(
@@ -493,7 +494,7 @@ class MultiviewConfig:
     jpeg_quality: int = field(
         default=95, validator=[validators.ge(1), validators.le(100)]
     )
-    val_samples: Optional[int] = 3000
+    val_samples: Optional[int] = 1000
 
 
 @define

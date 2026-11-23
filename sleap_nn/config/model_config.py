@@ -1211,9 +1211,13 @@ class CenteredVolumeHeadConfig:
             ``anchor_part`` (give the nodes when that anchor has no 3D targets, as an
             added midpoint node). *Default*: ``None``.
         n_voxels: (int) Voxels per cube side. *Default*: ``96``.
-        cube_size: (float or "auto") Cube side in world units. ``"auto"``: twice the 99th
-            percentile distance of any target node from the centre, measured on the
-            training targets and written back. *Default*: ``"auto"``.
+        cube_size: (float or "auto") Cube side in world units (the calibration's). It must
+            be set. The study used 384 on SLAP (its calibration unit is about 0.62 mm, so
+            about 236 mm) and 249.6 mm on DoublePoke; it compared only 320 and 384 on SLAP.
+            ``"auto"`` is twice the largest per-node 99th-percentile distance of the
+            training targets from the centre, rounded up to a tenth of a unit per voxel and
+            written back. It is untested: on the study's data it gives larger cubes than the
+            study's (SLAP 412.8, DoublePoke 268.8). *Default*: ``None`` (an error).
         ce_weight: (float) Weight of the cross-entropy term against the L1 term. At 0.01
             the study's pilot did not learn from scratch. *Default*: ``1.0``.
         ce_sigma_voxels: (float) Sigma of the cross-entropy's target Gaussian, in voxels.
@@ -1236,7 +1240,7 @@ class CenteredVolumeHeadConfig:
     part_names: Optional[List[str]] = None
     center_nodes: Optional[List[str]] = None
     n_voxels: int = field(default=96, validator=validators.ge(8))
-    cube_size: Any = "auto"
+    cube_size: Any = None
     ce_weight: float = field(default=1.0, validator=validators.ge(0))
     ce_sigma_voxels: float = field(default=1.5, validator=validators.gt(0))
     weight_decay: float = field(default=1e-4, validator=validators.ge(0))
@@ -1250,7 +1254,11 @@ class CenteredVolumeHeadConfig:
     def __attrs_post_init__(self):
         """Validate ``cube_size``."""
         cs = self.cube_size
-        if cs != "auto" and not (isinstance(cs, (int, float)) and cs > 0):
+        if (
+            cs is not None
+            and cs != "auto"
+            and not (isinstance(cs, (int, float)) and cs > 0)
+        ):
             raise ValueError(
                 f"centered_volume.volume.cube_size must be 'auto' or a positive number; "
                 f"got {cs!r}."
