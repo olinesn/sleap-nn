@@ -19,11 +19,11 @@ data_config:
     max_reproj_px: 10.0             # ...and a mean reprojection error below 10 px
     min_nodes: 6                    # an animal-frame trains with at least 6 target nodes
     cache_frames: memory            # every needed frame held JPEG-encoded in RAM
-    val_samples: 3000
+    val_samples: 1000               # the study's validation size
   use_augmentations_train: true
   augmentation_config:
     volume:
-      jitter: auto                  # 3.9 % of the cube side (15 of 384)
+      jitter: auto                  # 15/384 of the cube side: 15 at 384, 9.75 at 249.6
       random_yaw: true
       tilt_degrees: 0.0
       view_dropout: 0.15
@@ -46,7 +46,7 @@ model_config:
         part_names: null            # null: the 2D model's parts that have 3D targets
         center_nodes: null          # null: the 2D model's anchor_part ([Neck, TTI] for an added Center)
         n_voxels: 96
-        cube_size: auto             # 2 x the 99th-percentile reach of any node; written back
+        cube_size: 384.0            # world units, required: SLAP's (about 236 mm); 249.6 on DoublePoke (mm)
         ce_weight: 1.0
         ce_sigma_voxels: 1.5
         weight_decay: 1.0e-4

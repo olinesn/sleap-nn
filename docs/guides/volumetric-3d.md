@@ -79,9 +79,13 @@ frames would leak). The split is written to `split.json` in the run folder.
   `[Neck, TTI]`).
 - **Channels** are exactly `part_names`, in that order, each read from the 2D maps by
   name. The default is the 2D model's parts that have 3D targets.
-- **Size.** `cube_size: auto` is twice the largest 99th-percentile distance of any target
-  node from the centre (rounded up to a tenth of a world unit per voxel) and is written
-  into the saved config. Units are the calibration's.
+- **Size.** `cube_size` is required, in the calibration's world units. The study used 384
+  on SLAP (its calibration unit is about 0.62 mm, so about 236 mm) and 249.6 mm on
+  DoublePoke, and compared only 320 and 384 (on SLAP). The cube should hold the whole
+  animal around its centre, tail tip included, at any yaw. `cube_size: auto` (twice
+  the largest per-node 99th-percentile distance from the centre, written into the saved
+  config) is an untested convenience: on the study's data it gives larger cubes (SLAP
+  412.8, DoublePoke 268.8).
 - **Floor.** The cube's up axis is the floor normal: `multiview.up` if given, else the
   session's metadata (`up` or `floor_normal`), else a RANSAC plane through
   `up_fit_nodes` (floor-touching nodes such as tail tips), else through each

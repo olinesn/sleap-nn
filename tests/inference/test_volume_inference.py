@@ -252,7 +252,7 @@ def test_sample_config_is_valid():
         OmegaConf.load("docs/sample_configs/config_centered_volume_unet3d.yaml")
     )
     vol = cfg.model_config.head_configs.centered_volume.volume
-    assert vol.n_voxels == 96 and vol.cube_size == "auto" and vol.ce_weight == 1.0
+    assert vol.n_voxels == 96 and vol.cube_size == 384.0 and vol.ce_weight == 1.0
     assert (
         cfg.trainer_config.max_epochs * cfg.trainer_config.train_steps_per_epoch == 8000
     )
