@@ -54,6 +54,14 @@ linked to its video). Each **instance group** on a **frame group** (one instance
 camera, matched across cameras) is one training animal. LUC3D projects export exactly
 this.
 
+Any OpenCV lens model works: separate `fx` and `fy`, a lens centre anywhere, and all
+five distortion terms `[k1, k2, p1, p2, k3]`. That covers sleap-anipose's k1-only
+calibrations (the study's) and calibrat3's default `fx, fy, cx, cy, k1, k2` fit. The
+tests check calibrat3's fits of four DoublePoke cameras (k1 about -0.40, k2 about
++0.22) against OpenCV over the whole image, corners included. The network itself never
+sees the lens model: only the projection of the voxels into each camera, the 3D targets
+and the cube centres use it.
+
 Its 3D target (`data_config.multiview.target_source`):
 
 - `auto` (default): the group's `instance_3d` when set (LUC3D's 3D, hand-placed 3D),
