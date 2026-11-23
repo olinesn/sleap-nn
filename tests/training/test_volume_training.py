@@ -421,3 +421,36 @@ def test_load_study_checkpoint(tmp_path):
     x = torch.randn(1, 15, 8, 8, 8)
     with torch.no_grad():
         assert torch.equal(net(x), study.eval()(x))
+
+
+def test_frame_store_reads_embedded_jpeg_in_one_call(tmp_path):
+    """The study's frame files (JPEG in sleap-io's embedded layout) keep their bytes."""
+    import cv2
+    import h5py
+
+    rng = np.random.default_rng(0)
+    frames = [0, 15, 30, 45]
+    bufs = []
+    for _ in frames:
+        img = rng.integers(0, 255, (48, 64), dtype=np.uint8)
+        bufs.append(
+            cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 90])[1].ravel()
+        )
+    path = tmp_path / "cam.h5"
+    with h5py.File(path, "w") as h:
+        ds = h.create_dataset(
+            "video", (len(bufs),), dtype=h5py.vlen_dtype(np.dtype("uint8"))
+        )
+        for i, b in enumerate(bufs):
+            ds[i] = b
+        ds.attrs["format"] = "jpg"
+        ds.attrs["channel_order"] = "RGB"
+        h.create_dataset("frame_numbers", data=np.array(frames, np.int64))
+    video = sio.Video.from_filename(str(path), dataset="video")
+    want = [45, 0, 30]
+    got = VI.read_encoded_frames(video, want)
+    for f, g in zip(want, got):
+        assert np.array_equal(g, bufs[frames.index(f)])
+    store = VI.FrameStore(want, got)
+    assert np.array_equal(store.get(30), bufs[2]) and store.get(15) is None
+    assert VI.decode_frame(store.get(0), 1, 1.0).shape == (1, 48, 64)

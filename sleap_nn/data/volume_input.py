@@ -457,6 +457,69 @@ def encoded_frame(video: sio.Video, frame_idx: int, quality: int = 95) -> np.nda
     return buf.ravel()
 
 
+class FrameStore:
+    """Encoded frames of one camera of one session, in one buffer.
+
+    One ``uint8`` buffer and an offset table rather than a numpy array per frame:
+    dataloader workers fork with the cache, and a buffer per frame would put object
+    headers on the same pages as frame bytes, so reference counting in each worker
+    would copy the whole cache page by page (the study kept one buffer per camera
+    for this reason).
+    """
+
+    def __init__(self, frames: Sequence[int], bufs: Sequence[np.ndarray]):
+        """Concatenate ``bufs`` (the encoded ``frames``)."""
+        lens = np.array([len(b) for b in bufs], np.int64)
+        self.offsets = np.concatenate([[0], np.cumsum(lens)])
+        self.data = (
+            np.concatenate([np.asarray(b, np.uint8).ravel() for b in bufs])
+            if len(bufs)
+            else np.zeros(0, np.uint8)
+        )
+        self.index = {int(f): i for i, f in enumerate(frames)}
+
+    def get(self, frame_idx: int) -> Optional[np.ndarray]:
+        """The encoded bytes of a frame (``None`` if not stored)."""
+        i = self.index.get(int(frame_idx))
+        if i is None:
+            return None
+        return self.data[self.offsets[i] : self.offsets[i + 1]]
+
+
+def read_encoded_frames(
+    video: sio.Video, frames: Sequence[int], quality: int = 95
+) -> List[np.ndarray]:
+    """Encoded bytes of many frames of a video.
+
+    Frames embedded as JPEG/PNG in an HDF5 video (sleap-io's embedded layout, the
+    study's frame files) are read in one call per video and keep their bytes; other
+    videos are read frame by frame and encoded (:func:`encoded_frame`).
+    """
+    b = getattr(video, "backend", None)
+    if type(b).__name__ == "HDF5Video" and getattr(b, "has_embedded_images", False):
+        try:
+            import h5py
+
+            fmap = b.frame_map or {}
+            idx = np.array(
+                [fmap.get(int(f), int(f)) if fmap else int(f) for f in frames]
+            )
+            order = np.argsort(idx, kind="stable")
+            with h5py.File(b.filename, "r") as h:
+                ds = h[b.dataset]
+                uniq, inv = np.unique(idx[order], return_inverse=True)
+                data = ds[uniq]
+            out: List[Optional[np.ndarray]] = [None] * len(frames)
+            for k, o in enumerate(order):
+                out[o] = np.asarray(data[inv[k]]).view(np.uint8).ravel()
+            return out  # type: ignore[return-value]
+        except Exception as e:  # noqa: BLE001 - fall back to frame by frame
+            logger.warning(
+                f"Batch read of {video.filename} failed ({e}); frame by frame."
+            )
+    return [encoded_frame(video, int(f), quality) for f in frames]
+
+
 _REDUCED_FLAGS = {
     (1, 0.5): cv2.IMREAD_REDUCED_GRAYSCALE_2,
     (1, 0.25): cv2.IMREAD_REDUCED_GRAYSCALE_4,
@@ -567,7 +630,7 @@ class CenteredVolumeDataset(torch.utils.data.Dataset):
         self.image_decode = image_decode
         self.input_scale = input_scale
         self.cache_frames = cache_frames
-        self.cache: Dict[Tuple[int, int, int], np.ndarray] = {}
+        self.cache: Dict[Tuple[int, int], FrameStore] = {}
         if cache_frames == "memory":
             self._fill_cache(jpeg_quality)
 
@@ -581,11 +644,11 @@ class CenteredVolumeDataset(torch.utils.data.Dataset):
             for v, video in enumerate(self.sessions[si].data.videos):
                 if video is None:
                     continue
-                for f in sorted(frames):
-                    buf = encoded_frame(video, f, quality)
-                    self.cache[(si, v, f)] = buf
-                    n += 1
-                    nbytes += buf.nbytes
+                fr = sorted(frames)
+                store = FrameStore(fr, read_encoded_frames(video, fr, quality))
+                self.cache[(si, v)] = store
+                n += len(fr)
+                nbytes += store.data.nbytes
         logger.info(f"Cached {n} camera frames in memory ({nbytes / 2**30:.2f} GiB).")
 
     def __len__(self) -> int:
@@ -595,7 +658,8 @@ class CenteredVolumeDataset(torch.utils.data.Dataset):
     def _frame(self, si: int, v: int, f: int) -> Optional[np.ndarray]:
         scale = self.input_scale if self.image_decode == "reduced" else 1.0
         if self.cache_frames == "memory":
-            buf = self.cache.get((si, v, f))
+            store = self.cache.get((si, v))
+            buf = store.get(f) if store is not None else None
             if buf is None:
                 return None
             return decode_frame(buf, self.channels, scale)
