@@ -6,7 +6,7 @@ the parameters required to initialize the model config.
 
 from attrs import asdict, define, field, validators
 from sleap_nn.config.utils import oneof
-from typing import Optional, List
+from typing import Any, Optional, List
 from loguru import logger
 
 
@@ -1190,6 +1190,81 @@ class CenteredInstanceSegmentationConfig:
 
 
 @define
+class CenteredVolumeHeadConfig:
+    """Head config of the volumetric 3D model (``centered_volume``).
+
+    A cube is placed around each animal, every voxel is projected into every camera,
+    the frozen centered-instance model's confidence maps are read there and averaged
+    over the cameras, and a 3D UNet (backbone ``unet3d``) gives one probability volume
+    per body part. See ``docs/guides/volumetric-3d.md``.
+
+    Attributes:
+        centered_instance_model: (str) Folder of the trained centered-instance model
+            whose maps the volume reads. It is frozen and referenced, not copied.
+        centered_instance_sha256: (str) sha256 of that model's ``best.ckpt``, written at
+            training. Inference refuses another 2D model unless told otherwise.
+        part_names: (List[str]) Body parts, in channel order: the volume reads these maps
+            from the 2D model (picked by name) and predicts these parts. ``None``: the 2D
+            model's parts that have 3D targets. *Default*: ``None``.
+        center_nodes: (List[str]) The cube is centred on the mean of these nodes. It must
+            be where the 2D model centres its crops: ``None`` is the 2D model's
+            ``anchor_part`` (give the nodes when that anchor has no 3D targets, as an
+            added midpoint node). *Default*: ``None``.
+        n_voxels: (int) Voxels per cube side. *Default*: ``96``.
+        cube_size: (float or "auto") Cube side in world units. ``"auto"``: twice the 99th
+            percentile distance of any target node from the centre, measured on the
+            training targets and written back. *Default*: ``"auto"``.
+        ce_weight: (float) Weight of the cross-entropy term against the L1 term. At 0.01
+            the study's pilot did not learn from scratch. *Default*: ``1.0``.
+        ce_sigma_voxels: (float) Sigma of the cross-entropy's target Gaussian, in voxels.
+            *Default*: ``1.5``.
+        weight_decay: (float) AdamW weight decay. *Default*: ``1e-4``.
+        grad_clip_norm: (float) Gradient norm clipping. *Default*: ``1.0``.
+        image_decode: (str) ``"full"``: frames decoded at full resolution and cropped,
+            resized and padded by sleap-nn's top-down code, as ``sleap-nn predict``
+            feeds the 2D model. ``"reduced"``: JPEG frames decoded at the 2D model's input
+            scale and cropped there (the 2026-11 study's input). *Default*: ``"full"``.
+        validation_cov_scale: (float) The covariance scale measured on the validation set
+            at the end of training. Inference measures it on each run; this is the
+            fallback. Written at training. *Default*: ``None``.
+        output_stride: (int) Required on every sleap-nn head; 1 means voxels.
+            *Default*: ``1``.
+    """
+
+    centered_instance_model: Optional[str] = None
+    centered_instance_sha256: Optional[str] = None
+    part_names: Optional[List[str]] = None
+    center_nodes: Optional[List[str]] = None
+    n_voxels: int = field(default=96, validator=validators.ge(8))
+    cube_size: Any = "auto"
+    ce_weight: float = field(default=1.0, validator=validators.ge(0))
+    ce_sigma_voxels: float = field(default=1.5, validator=validators.gt(0))
+    weight_decay: float = field(default=1e-4, validator=validators.ge(0))
+    grad_clip_norm: Optional[float] = 1.0
+    image_decode: str = field(
+        default="full", validator=validators.in_(("full", "reduced"))
+    )
+    validation_cov_scale: Optional[float] = None
+    output_stride: int = 1
+
+    def __attrs_post_init__(self):
+        """Validate ``cube_size``."""
+        cs = self.cube_size
+        if cs != "auto" and not (isinstance(cs, (int, float)) and cs > 0):
+            raise ValueError(
+                f"centered_volume.volume.cube_size must be 'auto' or a positive number; "
+                f"got {cs!r}."
+            )
+
+
+@define
+class CenteredVolumeConfig:
+    """Head config for the volumetric 3D model type (``centered_volume``)."""
+
+    volume: Optional[CenteredVolumeHeadConfig] = None
+
+
+@define
 class SemanticSegmentationConfig:
     """Head config for whole-frame semantic (foreground) segmentation models.
 
@@ -1795,6 +1870,7 @@ class HeadConfig:
     centered_instance_segmentation: Optional[CenteredInstanceSegmentationConfig] = None
     semantic_segmentation: Optional[SemanticSegmentationConfig] = None
     embedding: Optional[EmbeddingConfig] = None
+    centered_volume: Optional[CenteredVolumeConfig] = None
     bbox_centernet: Optional[BBoxCenterNetConfig] = None
     bbox_ssd: Optional[BBoxSSDConfig] = None
 
@@ -1918,6 +1994,34 @@ class PretrainedConfig:
     detail_channels: Optional[List[int]] = None
 
 
+@define
+class UNet3DConfig:
+    """3D UNet backbone of the volumetric model (``centered_volume`` only).
+
+    Attributes:
+        in_channels: (int) Input channels; set from the head's ``part_names`` at training.
+            *Default*: ``None``.
+        filters: (int) Filters of the first block. *Default*: ``32``.
+        filters_rate: (float) Filter growth per block. *Default*: ``2.0``.
+        max_stride: (int) A power of 2; the network has ``log2(max_stride)`` down blocks.
+            The cube's ``n_voxels`` must be divisible by it. *Default*: ``8``.
+        norm: (str) ``group`` (GroupNorm, ``min(8, c)`` groups), ``instance`` or
+            ``none``. *Default*: ``"group"``.
+        convs_per_block: (int) Convolutions per block. *Default*: ``2``.
+        output_stride: (int) Set from the head (1). *Default*: ``1``.
+    """
+
+    in_channels: Optional[int] = None
+    filters: int = 32
+    filters_rate: float = 2.0
+    max_stride: int = 8
+    norm: str = field(
+        default="group", validator=validators.in_(("group", "instance", "none"))
+    )
+    convs_per_block: int = 2
+    output_stride: int = 1
+
+
 @oneof
 @define
 class BackboneConfig:
@@ -1929,12 +2033,14 @@ class BackboneConfig:
         swint: An instance of `SwinTConfig`.
         pretrained: An instance of `PretrainedConfig` (external HuggingFace
             pretrained backbone).
+        unet3d: An instance of `UNet3DConfig` (the `centered_volume` model only).
     """
 
     unet: Optional[UNetConfig] = None
     convnext: Optional[ConvNextConfig] = None
     swint: Optional[SwinTConfig] = None
     pretrained: Optional[PretrainedConfig] = None
+    unet3d: Optional[UNet3DConfig] = None
 
 
 @define

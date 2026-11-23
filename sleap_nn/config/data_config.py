@@ -322,16 +322,51 @@ class GeometricConfig:
 
 
 @define
+class VolumeAugmentationConfig:
+    """Augmentation of the volumetric model (``centered_volume``).
+
+    Applied on the GPU, per training sample, before the 2D model reads the crops.
+
+    Attributes:
+        jitter: (float or "auto") Uniform cube-centre jitter per axis, in world units.
+            ``"auto"`` is 3.9 % of the cube side (the study's 15 of 384). *Default*: ``"auto"``.
+        random_yaw: (bool) Turn the cube by a random yaw about the floor normal.
+            *Default*: ``True``.
+        tilt_degrees: (float) Tilt the cube's up axis by up to this angle, in a random
+            direction: a guard against a slightly wrong floor normal (untested in the
+            study; off). *Default*: ``0.0``.
+        view_dropout: (float) Probability of leaving each camera out. *Default*: ``0.15``.
+        min_views: (int) Cameras always kept. *Default*: ``2``.
+        max_views: (int) Train on a random subset of this many cameras per batch (cost:
+            the model averages over cameras; MultiCam_18 used 8). ``None``: all.
+            *Default*: ``None``.
+        photometric: (float) Per-camera brightness and contrast change of up to this
+            fraction before the 2D model. *Default*: ``0.15``.
+    """
+
+    jitter: Any = "auto"
+    random_yaw: bool = True
+    tilt_degrees: float = field(default=0.0, validator=validators.ge(0))
+    view_dropout: float = field(default=0.15, validator=validate_proportion)
+    min_views: int = field(default=2, validator=validators.ge(1))
+    max_views: Optional[int] = None
+    photometric: float = field(default=0.15, validator=validators.ge(0))
+
+
+@define
 class AugmentationConfig:
     """Configuration of Augmentation.
 
     Attributes:
         intensity: Configuration options for intensity-based augmentations like brightness, contrast, etc. If None, no intensity augmentations will be applied.
         geometric: Configuration options for geometric augmentations like rotation, scaling, translation etc. If None, no geometric augmentations will be applied.
+        volume: Augmentation of the volumetric model (`centered_volume`), which uses it
+            instead of `intensity` and `geometric`. If None, the model's defaults apply.
     """
 
     intensity: Optional[IntensityConfig] = None
     geometric: Optional[GeometricConfig] = None
+    volume: Optional[VolumeAugmentationConfig] = None
 
 
 def validate_test_file_path(instance, attribute, value):
@@ -411,6 +446,57 @@ class SplitConfig:
 
 
 @define
+class MultiviewConfig:
+    """Multi-camera data of the volumetric model (``centered_volume``).
+
+    Training data are ``.slp`` files with recording sessions (calibrated cameras and
+    their videos) whose frame groups hold instance groups: each instance group on a
+    frame is one training animal.
+
+    Attributes:
+        target_source: (str) The 3D target of an instance group: ``"auto"`` (its
+            ``instance_3d`` when set, else the robust DLT of its 2D instances),
+            ``"instance_3d"`` (only groups with one), ``"triangulate"`` (always the DLT).
+            *Default*: ``"auto"``.
+        up: (List[float]) The floor normal ``[x, y, z]`` in world coordinates.
+            ``None``: the session's metadata (``up`` or ``floor_normal``), else fitted.
+            *Default*: ``None``.
+        up_fit_nodes: (List[str]) Floor-touching nodes (tail tips, paws) for fitting
+            the floor; ``None``: each animal-frame's lowest reliable node. *Default*: ``None``.
+        floor_band: (float) Inlier band of the floor fit, world units. *Default*: ``4.0``.
+        min_views: (int) A triangulated target node needs this many cameras...
+            *Default*: ``2``.
+        max_reproj_px: (float) ...and a mean reprojection error below this (px).
+            *Default*: ``10.0``.
+        min_nodes: (int) An animal-frame trains only with this many target nodes.
+            *Default*: ``6``.
+        cache_frames: (str) ``"memory"``: every needed frame is read once and held
+            JPEG-encoded in RAM (frames already stored as JPEG keep their bytes);
+            ``"none"``: read from the videos at every step. *Default*: ``"memory"``.
+        jpeg_quality: (int) Quality of the cached JPEGs. *Default*: ``95``.
+        val_samples: (int) Validation animal-frames scored each epoch (a fixed random
+            subset); ``None``: all. *Default*: ``3000``.
+    """
+
+    target_source: str = field(
+        default="auto", validator=validators.in_(("auto", "instance_3d", "triangulate"))
+    )
+    up: Optional[List[float]] = None
+    up_fit_nodes: Optional[List[str]] = None
+    floor_band: float = field(default=4.0, validator=validators.gt(0))
+    min_views: int = field(default=2, validator=validators.ge(2))
+    max_reproj_px: float = field(default=10.0, validator=validators.gt(0))
+    min_nodes: int = field(default=6, validator=validators.ge(1))
+    cache_frames: str = field(
+        default="memory", validator=validators.in_(("memory", "none"))
+    )
+    jpeg_quality: int = field(
+        default=95, validator=[validators.ge(1), validators.le(100)]
+    )
+    val_samples: Optional[int] = 3000
+
+
+@define
 class DataConfig:
     """Data configuration.
 
@@ -470,6 +556,8 @@ class DataConfig:
             Pose keypoints sit inside the animal's outline, so a tight keypoint box
             is slightly smaller than the animal; a few pixels of padding compensate.
             Never applied to existing `UserBoundingBox` annotations. *Default*: `0.0`.
+        multiview: (MultiviewConfig) Multi-camera data of the volumetric model
+            (`centered_volume`); ignored by every other model type. *Default*: `None`.
     """
 
     train_labels_path: Optional[List[str]] = None
@@ -503,6 +591,7 @@ class DataConfig:
         validator=validators.in_(("auto", "bboxes", "instances", "masks")),
     )
     bbox_padding: float = field(default=0.0, validator=validators.ge(0))
+    multiview: Optional[MultiviewConfig] = None
 
 
 def data_mapper(legacy_config: dict) -> DataConfig:

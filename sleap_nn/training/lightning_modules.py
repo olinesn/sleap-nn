@@ -333,6 +333,12 @@ class LightningModel(L.LightningModule):
         model_type = get_model_type_from_cfg(config)
         backbone_type = get_backbone_type_from_cfg(config)
 
+        if model_type == "centered_volume":
+            # Multi-camera: the volume module is not a 2D `LightningModel`.
+            from sleap_nn.training.volume import CenteredVolumeLightningModule
+
+            return CenteredVolumeLightningModule(config)
+
         lightning_models = {
             "single_instance": SingleInstanceLightningModule,
             "centroid": CentroidLightningModule,
