@@ -540,6 +540,106 @@ def test_associate_frame_groups_animals_across_cameras():
     assert MV.associate_frame(cams, inst_by_view, max_animals=1).__len__() == 1
 
 
+def _associate_frame_per_candidate(cams, inst_by_view, max_animals):
+    """associate_frame as first written (one robust_triangulate per candidate pair and
+    one _median_distance per proposal and camera), kept as the reference that the
+    batched version must match."""
+    from itertools import combinations
+
+    from scipy.optimize import linear_sum_assignment
+
+    V = cams.n_views
+    gates = MV._gates(cams, MV.GATE_PX)
+    ibc = {}
+    for v, x in inst_by_view.items():
+        keep = np.nonzero(np.isfinite(x[:, :, :2]).all(-1).sum(-1) >= 3)[0]
+        if len(keep):
+            ibc[v] = (x[keep, :, :2].astype(np.float64), keep)
+    if len(ibc) < MV.MIN_CAMS:
+        return []
+    J = next(iter(ibc.values()))[0].shape[1]
+    props = []
+    for a, b in combinations(sorted(ibc), 2):
+        xa, xb = ibc[a][0], ibc[b][0]
+        for i in range(len(xa)):
+            for j in range(len(xb)):
+                uv = np.full((J, V, 2), np.nan)
+                uv[:, a], uv[:, b] = xa[i], xb[j]
+                tr = MV.robust_triangulate(uv, cams)
+                if np.isfinite(tr.X).all(-1).sum() < 3:
+                    continue
+                e2 = MV._nanmedian(MV._nanmean(tr.err_views[:, [a, b]], 1))
+                if not e2 < MV.PAIR_PX:
+                    continue
+                sup, tot = {a: i, b: j}, 0.0
+                for c in ibc:
+                    if c in (a, b):
+                        continue
+                    d = MV._median_distance(cams, c, tr.X, ibc[c][0])
+                    if np.isfinite(d).any() and np.nanmin(d) < gates[c]:
+                        sup[c] = int(np.nanargmin(d))
+                        tot += float(np.nanmin(d))
+                props.append((len(sup), -tot, sup))
+    animals, taken = [], {v: set() for v in range(V)}
+    for n, _, sup in sorted(props, key=lambda p: (p[0], p[1]), reverse=True):
+        if len(animals) >= max_animals:
+            break
+        if n < MV.MIN_CAMS or any(i in taken[v] for v, i in sup.items()):
+            continue
+        animals.append(sup)
+        for v, i in sup.items():
+            taken[v].add(i)
+    if not animals:
+        return []
+    Xa = []
+    for sup in animals:
+        uv = np.full((J, V, 2), np.nan)
+        for v, i in sup.items():
+            uv[:, v] = ibc[v][0][i]
+        Xa.append(MV.robust_triangulate(uv, cams).X)
+    out = [dict() for _ in animals]
+    for v, (inst, keep) in ibc.items():
+        d = np.nan_to_num(
+            np.stack([MV._median_distance(cams, v, X, inst) for X in Xa]), nan=1e9
+        )
+        r, c = linear_sum_assignment(d)
+        for ai, ii in zip(r, c):
+            if d[ai, ii] < gates[v]:
+                out[ai][v] = int(keep[ii])
+    return out
+
+
+def test_associate_frame_matches_the_per_candidate_rule():
+    """The batched matcher returns what one triangulation per candidate pair returned,
+    on crowded frames with missing cameras, detections and nodes, and spurious ones."""
+    rng = np.random.default_rng(3)
+    sio_cams = make_cameras(6, distortion=True, seed=2)
+    cams = MV.CameraArrays.from_cameras(sio_cams)
+    n_animals_found = []
+    for trial in range(60):
+        n = int(rng.integers(1, 5))
+        poses = random_poses(n, seed=100 + trial, spread=float(rng.choice([60, 150])))
+        inst_by_view = {}
+        for v, cam in enumerate(sio_cams):
+            if rng.random() < 0.15:
+                continue  # camera saw nothing
+            keep = [a for a in range(n) if rng.random() > 0.15]
+            pts = [cv_project(cam, poses[a]) for a in keep]
+            if rng.random() < 0.3:  # a spurious detection
+                pts.append(cv_project(cam, poses[0]) + rng.normal(scale=80, size=2))
+            if not pts:
+                continue
+            pts = np.stack(pts)[rng.permutation(len(pts))]
+            pts = pts + rng.normal(scale=float(rng.choice([0.5, 4.0])), size=pts.shape)
+            pts[rng.random(pts.shape[:2]) < 0.2] = np.nan
+            inst_by_view[v] = pts
+        max_animals = int(rng.integers(1, 5))
+        new = MV.associate_frame(cams, inst_by_view, max_animals)
+        assert new == _associate_frame_per_candidate(cams, inst_by_view, max_animals)
+        n_animals_found.append(len(new))
+    assert max(n_animals_found) >= 3 and min(n_animals_found) <= 1  # varied frames
+
+
 # ---------------------------------------------------------------------------------------
 # Floor normal
 # ---------------------------------------------------------------------------------------
