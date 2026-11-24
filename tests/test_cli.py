@@ -1363,7 +1363,10 @@ class TestTrainDryRun:
         config_path = tmp_path / "config.yaml"
         OmegaConf.save(sample_config, config_path.as_posix())
 
-        result = run_cli(
+        # A real `python -m sleap_nn.cli` process on purpose (most CLI tests run
+        # in-process via run_cli): covers the `__main__` entry point, the exit code
+        # of a real process, and logging through a real pipe (cp1252 on Windows).
+        result = subprocess.run(
             [*sleap_nn_cli(), "train", config_path.as_posix(), "--dry-run"],
             capture_output=True,
             text=True,

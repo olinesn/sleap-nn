@@ -81,6 +81,9 @@ def run_cli(
     if result.exception is not None and not isinstance(result.exception, SystemExit):
         stderr += "".join(traceback.format_exception(*result.exc_info))
     proc = subprocess.CompletedProcess(cmd, result.exit_code, result.stdout, stderr)
-    if check:
-        proc.check_returncode()
+    if check and proc.returncode != 0:
+        error = subprocess.CalledProcessError(proc.returncode, cmd, proc.stdout, stderr)
+        # pytest prints notes; CalledProcessError's message alone has no traceback.
+        error.add_note(stderr[-3000:])
+        raise error
     return proc
