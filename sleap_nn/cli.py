@@ -1446,6 +1446,21 @@ def _run_inference_impl(**kwargs):
     else:
         kwargs["frames"] = None
 
+    # ── Volumetric 3D path (`centered_volume`): multi-camera sessions in, 3D out ──
+    volume_opts = {
+        k: kwargs.pop(k, None)
+        for k in (
+            "vol3d",
+            "volume_passes",
+            "allow_other_ci",
+            "chains",
+            "cov_scale",
+            "volume_batch_size",
+        )
+    }
+    if _has_volume_model(kwargs.get("model_paths")):
+        return _run_volume(kwargs, volume_opts)
+
     # Tracker flags the selected tracker family would ignore, on every route.
     _check_tracker_flags(kwargs)
 
@@ -2265,6 +2280,91 @@ def _video_selection_from_kwargs(labels, video_index: int, kwargs: dict):
         exclude_user_labeled=bool(kwargs.get("exclude_user_labeled")),
         only_predicted_frames=bool(kwargs.get("only_predicted_frames")),
     )
+
+
+def _model_type_of(model_path) -> Optional[str]:
+    """The model type of a model folder (``None`` if unreadable or an export)."""
+    from sleap_nn.config.utils import get_model_type_from_cfg, resolve_model_dir
+    from sleap_nn.inference.loaders import _load_training_config
+
+    try:
+        if _is_export_dir(model_path):
+            return None
+        cfg, _ = _load_training_config(resolve_model_dir(model_path))
+        return get_model_type_from_cfg(config=cfg)
+    except Exception:  # noqa: BLE001 - fail open; only gate the exact case
+        return None
+
+
+def _has_volume_model(model_paths) -> bool:
+    """Return ``True`` if any entry in ``model_paths`` is a ``centered_volume`` model."""
+    return any(_model_type_of(m) == "centered_volume" for m in (model_paths or []))
+
+
+def _run_volume(kwargs, volume_opts):
+    """``sleap-nn predict`` with a ``centered_volume`` model.
+
+    ``-m`` takes the volume folder and optionally the centroid and centered-instance
+    folders; ``-i`` is an ``.slp`` with a recording session. Writes the ``.slp`` with
+    3D on the instance groups, and LUC3D's ``.vol3d.h5``.
+    """
+    import sleap_io as sio
+
+    import sleap_nn
+    from sleap_nn.config.utils import resolve_model_dir
+    from sleap_nn.inference.volume import predict_volume3d, write_session_volumes
+
+    paths = [resolve_model_dir(m) for m in kwargs["model_paths"]]
+    types = {m: _model_type_of(m) for m in paths}
+    vols = [m for m in paths if types[m] == "centered_volume"]
+    if len(vols) != 1:
+        raise click.UsageError("Pass exactly one `centered_volume` model with -m.")
+    centroid = [m for m in paths if types[m] == "centroid"]
+    ci = [m for m in paths if types[m] == "centered_instance"]
+    other = [m for m in paths if m not in vols + centroid + ci]
+    if other or len(centroid) > 1 or len(ci) > 1:
+        raise click.UsageError(
+            "With a `centered_volume` model, -m takes at most one `centroid` and one "
+            f"`centered_instance` model; got {[(m, types[m]) for m in paths]}."
+        )
+    data_path = kwargs["data_path"]
+    if not str(data_path).endswith(".slp"):
+        raise click.UsageError(
+            "A `centered_volume` model reads an .slp with a recording session "
+            "(calibrated cameras and their videos)."
+        )
+    out = kwargs.get("output_path") or (
+        str(data_path)[: -len(".slp")] + ".predictions.slp"
+    )
+    if Path(out).resolve() == Path(data_path).resolve():
+        raise click.UsageError("-o must not overwrite the input .slp.")
+    labels = sio.load_slp(data_path)
+    passes = volume_opts.get("volume_passes") or "auto"
+    pred = predict_volume3d(
+        labels,
+        vols[0],
+        centroid_model=centroid[0] if centroid else None,
+        centered_instance_model=ci[0] if ci else None,
+        frames=kwargs.get("frames"),
+        passes=passes if passes == "auto" else int(passes),
+        max_animals=kwargs.get("max_instances"),
+        allow_other_ci=bool(volume_opts.get("allow_other_ci")),
+        cov_scale=volume_opts.get("cov_scale"),
+        device=kwargs.get("device") or "auto",
+        batch_size=int(volume_opts.get("volume_batch_size") or 16),
+    )
+    pred.labels.save(out)
+    logger.info(f"Wrote {out}")
+    stem = out[: -len(".slp")] if out.endswith(".slp") else out
+    vol3d = volume_opts.get("vol3d") or stem + ".vol3d.h5"
+    write_session_volumes(
+        pred,
+        vol3d,
+        source=f"sleap-nn {sleap_nn.__version__} centered_volume "
+        f"{Path(vols[0]).resolve().as_posix()}",
+        chains_path=volume_opts.get("chains"),
+    )
+    return pred.labels
 
 
 def _is_embedding_model(model_path) -> bool:
@@ -4479,6 +4579,47 @@ def _common_inference_options(f):
 
 @cli.command(context_settings=CONTEXT_SETTINGS)
 @_common_inference_options
+@click.option(
+    "--vol3d",
+    type=str,
+    default=None,
+    help="centered_volume only: path of LUC3D's .vol3d.h5 output (default: next to "
+    "the output .slp; with several sessions, one file per session).",
+)
+@click.option(
+    "--volume_passes",
+    type=click.Choice(["auto", "1", "2"]),
+    default="auto",
+    help="centered_volume only: volume passes. auto: 2 when the cube is centred on "
+    "other nodes than the 2D model's anchor, else 1.",
+)
+@click.option(
+    "--allow_other_ci",
+    is_flag=True,
+    default=False,
+    help="centered_volume only: accept a centered-instance model other than the one "
+    "the volume was trained on (a retrained 2D model of the same rig).",
+)
+@click.option(
+    "--chains",
+    type=str,
+    default=None,
+    help="centered_volume only: a JSON file of skeleton chains for LUC3D's skeleton "
+    "check, written into the .vol3d.h5.",
+)
+@click.option(
+    "--cov_scale",
+    type=float,
+    default=None,
+    help="centered_volume only: write this cov_scale instead of measuring it on the "
+    "run.",
+)
+@click.option(
+    "--volume_batch_size",
+    type=int,
+    default=16,
+    help="centered_volume only: animals per batch of the 3D network. Default: 16.",
+)
 def predict(**kwargs):
     """Run inference on videos or labels files.
 
