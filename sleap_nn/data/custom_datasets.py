@@ -6486,6 +6486,16 @@ def get_train_val_datasets(
     model_type = get_model_type_from_cfg(config=config)
     backbone_type = get_backbone_type_from_cfg(config=config)
 
+    if model_type == "centered_volume":
+        # Multi-camera samples (instance groups on frame groups), built by the volume
+        # trainer; without this the final `else` would quietly build single-instance
+        # datasets from the session's 2D frames.
+        raise ValueError(
+            "`centered_volume` datasets are built by "
+            "sleap_nn.training.volume.VolumeModelTrainer (sleap-nn train does this), "
+            "not by get_train_val_datasets."
+        )
+
     # Gate the lossy disk cache for the embedding (appearance / re-ID) model (SPEC §5.1):
     # `torch_dataset_cache_img_disk` writes source frames as JPEG, which silently
     # degrades an appearance model. The disk cache has no lossless format, so refuse it
