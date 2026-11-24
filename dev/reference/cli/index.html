@@ -1560,6 +1560,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../guides/volumetric-3d/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Volumetric 3D (multi-camera)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../guides/export/" class="md-nav__link">
         
   
@@ -2082,6 +2110,17 @@
     <span class="md-ellipsis">
       
         Tracking
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#volumetric-3d-centered_volume" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Volumetric 3D (centered_volume)
       
     </span>
   </a>
@@ -2885,6 +2924,34 @@
     
   
     unet
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/architectures/unet3d/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    unet3d
   
 
     
@@ -4491,6 +4558,34 @@
     
   
     utils
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/data/volume_input/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    volume_input
   
 
     
@@ -7063,6 +7158,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../api/inference/volume/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    volume
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../api/inference/writer/" class="md-nav__link">
         
   
@@ -8287,6 +8410,34 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/training/volume/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    volume
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -8523,6 +8674,17 @@
     <span class="md-ellipsis">
       
         Tracking
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#volumetric-3d-centered_volume" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Volumetric 3D (centered_volume)
       
     </span>
   </a>
@@ -9889,6 +10051,61 @@ shown). Giving a classic-only option to a MOT tracker, or a MOT-only option to
 <td>Carrier to track (one the labels do not hold is an error)</td>
 <td><code>keypoints</code>, <code>masks</code></td>
 <td>auto</td>
+</tr>
+</tbody>
+</table>
+<h3 id="volumetric-3d-centered_volume">Volumetric 3D (<code>centered_volume</code>)<a class="headerlink" href="#volumetric-3d-centered_volume" title="Permanent link">&para;</a></h3>
+<p>With a <code>centered_volume</code> model in <code>-m</code>, <code>predict</code> reads an <code>.slp</code> with a recording
+session (calibrated cameras and their videos) and writes 3D: a <code>PredictedInstance3D</code> on
+every instance group of the output <code>.slp</code>, and LUC3D's <code>.vol3d.h5</code>. Add
+<code>-m centroid -m centered_instance</code> to run 2D on frames that have no instance groups;
+<code>--max_instances</code> then caps the animals matched per frame. See
+<a href="../../guides/volumetric-3d/">Volumetric 3D</a>.</p>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Description</th>
+<th>Values</th>
+<th>Default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--vol3d</code></td>
+<td>Path of the <code>.vol3d.h5</code> (one file per session when there are several)</td>
+<td><code>PATH</code></td>
+<td>next to <code>-o</code></td>
+</tr>
+<tr>
+<td><code>--volume_passes</code></td>
+<td>Volume passes; <code>auto</code> is 2 when the cube is centred on other nodes than the 2D model's anchor, else 1</td>
+<td><code>auto</code>, <code>1</code>, <code>2</code></td>
+<td><code>auto</code></td>
+</tr>
+<tr>
+<td><code>--allow_other_ci</code></td>
+<td>Accept a centered-instance model other than the one the volume was trained on (a retrained 2D model of the same rig)</td>
+<td>Flag</td>
+<td><code>false</code></td>
+</tr>
+<tr>
+<td><code>--chains</code></td>
+<td>JSON file of skeleton chains for LUC3D's skeleton check, written into the <code>.vol3d.h5</code></td>
+<td><code>PATH</code></td>
+<td>None</td>
+</tr>
+<tr>
+<td><code>--cov_scale</code></td>
+<td>Write this <code>cov_scale</code> instead of measuring it on the run</td>
+<td><code>FLOAT</code></td>
+<td>measured</td>
+</tr>
+<tr>
+<td><code>--volume_batch_size</code></td>
+<td>Animals per batch of the 3D network (fixed; the last batch is padded)</td>
+<td><code>INT</code></td>
+<td><code>16</code></td>
 </tr>
 </tbody>
 </table>

@@ -85,6 +85,10 @@
          <lastmod>2026-11-24</lastmod>
     </url>
     <url>
+         <loc>https://nn.sleap.ai/dev/api/architectures/unet3d/</loc>
+         <lastmod>2026-11-24</lastmod>
+    </url>
+    <url>
          <loc>https://nn.sleap.ai/dev/api/architectures/utils/</loc>
          <lastmod>2026-11-24</lastmod>
     </url>
@@ -277,6 +281,10 @@
          <lastmod>2026-11-24</lastmod>
     </url>
     <url>
+         <loc>https://nn.sleap.ai/dev/api/data/volume_input/</loc>
+         <lastmod>2026-11-24</lastmod>
+    </url>
+    <url>
          <loc>https://nn.sleap.ai/dev/api/export/</loc>
          <lastmod>2026-11-24</lastmod>
     </url>
@@ -450,6 +458,10 @@
     </url>
     <url>
          <loc>https://nn.sleap.ai/dev/api/inference/utils/</loc>
+         <lastmod>2026-11-24</lastmod>
+    </url>
+    <url>
+         <loc>https://nn.sleap.ai/dev/api/inference/volume/</loc>
          <lastmod>2026-11-24</lastmod>
     </url>
     <url>
@@ -721,6 +733,10 @@
          <lastmod>2026-11-24</lastmod>
     </url>
     <url>
+         <loc>https://nn.sleap.ai/dev/api/training/volume/</loc>
+         <lastmod>2026-11-24</lastmod>
+    </url>
+    <url>
          <loc>https://nn.sleap.ai/dev/configuration/</loc>
          <lastmod>2026-11-24</lastmod>
     </url>
@@ -850,6 +866,10 @@
     </url>
     <url>
          <loc>https://nn.sleap.ai/dev/guides/training-guide/</loc>
+         <lastmod>2026-11-24</lastmod>
+    </url>
+    <url>
+         <loc>https://nn.sleap.ai/dev/guides/volumetric-3d/</loc>
          <lastmod>2026-11-24</lastmod>
     </url>
     <url>
