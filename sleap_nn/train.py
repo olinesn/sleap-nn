@@ -486,6 +486,18 @@ def _run_embedding_split_eval(
     return metrics
 
 
+def _is_volume_config(config: DictConfig) -> bool:
+    """True for a `centered_volume` config.
+
+    Reads the key without requiring the rest of the config, so incomplete configs still
+    fail where they did before.
+    """
+    head = OmegaConf.select(
+        config, "model_config.head_configs.centered_volume", default=None
+    )
+    return head is not None
+
+
 def run_training(
     config: DictConfig,
     train_labels: Optional[List[sio.Labels]] = None,
@@ -507,6 +519,11 @@ def run_training(
     sleap_nn._use_training_rank(
         OmegaConf.select(config, "trainer_config.trainer_devices", default=None)
     )
+    if dry_run and _is_volume_config(config):
+        raise NotImplementedError(
+            "--dry-run is not supported for `centered_volume` yet; train with a small "
+            "trainer_config.max_epochs / train_steps_per_epoch instead."
+        )
     if dry_run:
         logger.info(get_startup_info_string())
         trainer = ModelTrainer.get_model_trainer_from_config(
@@ -519,6 +536,23 @@ def run_training(
     start_timestamp = str(datetime.now())
     logger.info(f"Started training at: {start_timestamp}")
     logger.info(get_startup_info_string())
+
+    if _is_volume_config(config):
+        # Multi-camera volumetric model: its own data and loop, and no 2D
+        # post-training evaluation (its validation numbers are logged in training).
+        from sleap_nn.training.volume import train_volume
+
+        trainer = train_volume(config, train_labels=train_labels, val_labels=val_labels)
+        logger.info(
+            f"Finished training at: {datetime.now()}; total training time: "
+            f"{time() - start_train_time:.0f} secs"
+        )
+        if trainer.config.trainer_config.use_wandb:
+            import wandb
+
+            if wandb.run is not None:
+                wandb.finish()
+        return trainer
 
     # provide the labels as the train labels, val labels will be split from the train labels
     trainer = ModelTrainer.get_model_trainer_from_config(

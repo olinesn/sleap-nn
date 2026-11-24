@@ -121,6 +121,7 @@ def make_session_labels(
     videos: Optional[Sequence[sio.Video]] = None,
     cameras: Optional[List[sio.Camera]] = None,
     poses: Optional[np.ndarray] = None,
+    nodes: Optional[Sequence[str]] = None,
 ):
     """A ``sio.Labels`` with one recording session.
 
@@ -133,12 +134,13 @@ def make_session_labels(
     """
     rng = np.random.default_rng(seed + 1)
     cams = cameras or make_cameras(n_views, seed=seed)
-    skel = sio.Skeleton(nodes=list(NODES), name="mouse")
+    nodes = list(nodes or NODES)
+    skel = sio.Skeleton(nodes=nodes, name="mouse")
     if videos is None:
         videos = [sio.Video(filename=f"{c.name}.mp4", open_backend=False) for c in cams]
     if poses is None:
         poses = random_poses(n_frames * n_animals, seed=seed).reshape(
-            n_frames, n_animals, len(NODES), 3
+            n_frames, n_animals, len(nodes), 3
         )
     session = sio.RecordingSession(camera_group=sio.CameraGroup(cameras=cams))
     for cam, vid in zip(cams, videos):
@@ -151,12 +153,12 @@ def make_session_labels(
             insts = []
             for a in range(n_animals):
                 uv = project(cam, poses[f, a]) + rng.normal(
-                    scale=noise_px, size=(len(NODES), 2)
+                    scale=noise_px, size=(len(nodes), 2)
                 ) * (noise_px > 0)
                 insts.append(
                     sio.PredictedInstance.from_numpy(
                         points_data=uv,
-                        point_scores=np.ones(len(NODES)),
+                        point_scores=np.ones(len(nodes)),
                         score=1.0,
                         skeleton=skel,
                     )
@@ -184,3 +186,62 @@ def make_session_labels(
         labeled_frames=lfs, videos=list(videos), skeletons=[skel], sessions=[session]
     )
     return labels, poses
+
+
+def two_node_poses(n: int, seed: int = 0) -> np.ndarray:
+    """``(n, 2, 3)`` poses of a two-node animal ("A" head, "B" tail), 40 mm long."""
+    rng = np.random.default_rng(seed)
+    out = []
+    for _ in range(n):
+        yaw = rng.uniform(0, 2 * np.pi)
+        c = np.array([*rng.uniform(-30, 30, 2), 15.0])
+        d = 20.0 * np.array([np.cos(yaw), np.sin(yaw), 0.2])
+        out.append(np.stack([c + d, c - d]))
+    return np.stack(out)
+
+
+def render_png_videos(
+    directory,
+    cameras: List[sio.Camera],
+    poses: np.ndarray,
+    sigma: float = 2.5,
+) -> List[sio.Video]:
+    """One PNG-sequence video per camera: dark frames with a bright spot per keypoint.
+
+    Args:
+        directory: Folder to write ``<camera>/<frame>.png`` into.
+        cameras: The cameras (their ``size`` sets the frame size).
+        poses: ``(F, A, J, 3)`` world keypoints.
+        sigma: Spot size (px).
+
+    Returns:
+        The videos, in camera order.
+    """
+    from pathlib import Path
+
+    directory = Path(directory)
+    videos = []
+    for cam in cameras:
+        w, h = (int(x) for x in cam.size)
+        yy, xx = np.mgrid[0:h, 0:w]
+        paths = []
+        cdir = directory / cam.name
+        cdir.mkdir(parents=True, exist_ok=True)
+        for f in range(poses.shape[0]):
+            img = np.full((h, w), 20.0)
+            for uv in project(cam, poses[f]).reshape(-1, 2):
+                img += 200 * np.exp(
+                    -((xx - uv[0]) ** 2 + (yy - uv[1]) ** 2) / (2 * sigma**2)
+                )
+            p = cdir / f"{f:04d}.png"
+            cv2.imwrite(str(p), np.clip(img, 0, 255).astype(np.uint8))
+            paths.append(str(p))
+        videos.append(sio.Video.from_filename(paths))
+    return videos
+
+
+def small_cameras(n_views: int = 3, seed: int = 0) -> List[sio.Camera]:
+    """Small 160 x 128 cameras close to the origin (for CPU tests)."""
+    return make_cameras(
+        n_views, radius=220.0, height=150.0, size=(160, 128), focal=170.0, seed=seed
+    )

@@ -102,6 +102,50 @@ def get_backbone_type_from_cfg(config: DictConfig):
     return backbone_type
 
 
+def check_volume_config(config: DictConfig) -> None:
+    """Check the volumetric model's config (`centered_volume` + `unet3d`).
+
+    The `unet3d` backbone exists only for the `centered_volume` head and the head only
+    runs on it, so either without the other is an error. The cube's `n_voxels` must be
+    divisible by the backbone's `max_stride`, and the head needs its 2D model.
+
+    Raises:
+        ValueError: On any of these.
+    """
+    backbone_type = get_backbone_type_from_cfg(config)
+    model_type = get_model_type_from_cfg(config)
+    if (backbone_type == "unet3d") != (model_type == "centered_volume"):
+        raise ValueError(
+            "The `unet3d` backbone and the `centered_volume` head go together: got "
+            f"backbone `{backbone_type}` with head `{model_type}`."
+        )
+    if model_type != "centered_volume":
+        return
+    vol = OmegaConf.select(config, "model_config.head_configs.centered_volume.volume")
+    if vol is None:
+        raise ValueError(
+            "model_config.head_configs.centered_volume.volume must be set (its "
+            "`centered_instance_model` at least)."
+        )
+    if not vol.centered_instance_model:
+        raise ValueError(
+            "model_config.head_configs.centered_volume.volume.centered_instance_model "
+            "must name the trained centered-instance model folder the volume reads."
+        )
+    if vol.cube_size is None:
+        raise ValueError(
+            "model_config.head_configs.centered_volume.volume.cube_size must be set: the "
+            "cube side in world units (the study: 384 on SLAP, about 236 mm; 249.6 mm on "
+            "DoublePoke), or 'auto' (untested; larger than the study's cubes)."
+        )
+    max_stride = config.model_config.backbone_config.unet3d.max_stride
+    if vol.n_voxels % max_stride:
+        raise ValueError(
+            f"centered_volume.volume.n_voxels ({vol.n_voxels}) must be divisible by "
+            f"unet3d.max_stride ({max_stride})."
+        )
+
+
 def get_output_strides_from_heads(head_configs: DictConfig):
     """Get list of output strides from head configs."""
     output_strides_from_heads = []

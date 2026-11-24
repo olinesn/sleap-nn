@@ -36,7 +36,7 @@ from sleap_nn.config.model_config import ModelConfig
 from sleap_nn.config.model_config import drop_removed_embedding_keys, model_mapper
 from sleap_nn.config.trainer_config import TrainerConfig
 from sleap_nn.config.trainer_config import trainer_mapper
-from sleap_nn.config.utils import get_output_strides_from_heads
+from sleap_nn.config.utils import check_volume_config, get_output_strides_from_heads
 
 
 @define
@@ -134,6 +134,7 @@ def verify_training_cfg(cfg: DictConfig) -> DictConfig:
 
     # Verify required fields are set
     check_must_be_set(config)
+    check_volume_config(config)
     return config
 
 

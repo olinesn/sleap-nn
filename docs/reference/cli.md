@@ -300,6 +300,24 @@ shown). Giving a classic-only option to a MOT tracker, or a MOT-only option to
 | `--oks_stddev` | OKS spread for `--scoring_method oks` (refused with any other similarity) | `FLOAT` | `0.1` |
 | `--features` | Carrier to track (one the labels do not hold is an error) | `keypoints`, `masks` | auto |
 
+### Volumetric 3D (`centered_volume`)
+
+With a `centered_volume` model in `-m`, `predict` reads an `.slp` with a recording
+session (calibrated cameras and their videos) and writes 3D: a `PredictedInstance3D` on
+every instance group of the output `.slp`, and LUC3D's `.vol3d.h5`. Add
+`-m centroid -m centered_instance` to run 2D on frames that have no instance groups;
+`--max_instances` then caps the animals matched per frame. See
+[Volumetric 3D](../guides/volumetric-3d.md).
+
+| Option | Description | Values | Default |
+|--------|-------------|--------|---------|
+| `--vol3d` | Path of the `.vol3d.h5` (one file per session when there are several) | `PATH` | next to `-o` |
+| `--volume_passes` | Volume passes; `auto` is 2 when the cube is centred on other nodes than the 2D model's anchor, else 1 | `auto`, `1`, `2` | `auto` |
+| `--allow_other_ci` | Accept a centered-instance model other than the one the volume was trained on (a retrained 2D model of the same rig) | Flag | `false` |
+| `--chains` | JSON file of skeleton chains for LUC3D's skeleton check, written into the `.vol3d.h5` | `PATH` | None |
+| `--cov_scale` | Write this `cov_scale` instead of measuring it on the run | `FLOAT` | measured |
+| `--volume_batch_size` | Animals per batch of the 3D network (fixed; the last batch is padded) | `INT` | `16` |
+
 ### Exported Models and Performance
 
 `predict` auto-detects exported models: if `--model_paths`/`-m` points to a
