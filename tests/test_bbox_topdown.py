@@ -29,6 +29,10 @@ from sleap_nn.data.instance_cropping import (
 from sleap_nn.data.skia_augmentation import crop_and_resize_skia
 from sleap_nn.inference.layers.bbox import BBoxStageLayer, gt_boxes_from_instances
 
+# Under pytest-xdist (`--dist loadgroup`) keep this module on one worker, so the
+# module-scoped `trained_pair` fixture (it trains three models) runs once.
+pytestmark = pytest.mark.xdist_group("bbox_topdown")
+
 
 # --------------------------------------------------------------------------- #
 # Geometry

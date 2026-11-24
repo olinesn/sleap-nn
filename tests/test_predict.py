@@ -8,7 +8,7 @@ from sleap_nn.legacy_predict import run_inference
 from loguru import logger
 from _pytest.logging import LogCaptureFixture
 import torch
-from tests.utils.cli import cpu_only_env, sleap_nn_cli
+from tests.utils.cli import cpu_only_env, run_cli, sleap_nn_cli
 
 
 def test_run_inference_emits_deprecation_warning(
@@ -1342,7 +1342,7 @@ def test_predict_main(
         "--device",
         "cpu" if torch.backends.mps.is_available() else "auto",
     ]
-    result = subprocess.run(
+    result = run_cli(
         cmd, check=True, capture_output=True, text=True, env=cpu_only_env()
     )
     assert Path(f"{tmp_path}/test.slp").exists()

@@ -5,7 +5,7 @@ import pytest
 from pathlib import Path
 import copy
 import torch
-from tests.utils.cli import cpu_only_env, sleap_nn_cli
+from tests.utils.cli import cpu_only_env, run_cli, sleap_nn_cli
 import warnings
 from sleap_nn.legacy_predict import run_inference
 from sleap_nn.evaluation import (
@@ -773,7 +773,7 @@ def test_evaluator_main(
         f"{tmp_path}/metrics_test.npz",
     ]
     # Run the command and check for errors
-    result = subprocess.run(
+    result = run_cli(
         cmd, check=True, capture_output=True, text=True, env=cpu_only_env()
     )
     assert Path(f"{tmp_path}/metrics_test.npz").exists()
