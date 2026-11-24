@@ -1,8 +1,29 @@
 """Config for pytests."""
 
+import os
+
 import pytest
+import torch
 
 import sleap_nn
+
+
+def _share_cpus_between_xdist_workers():
+    """Give each pytest-xdist worker an equal share of the CPUs for torch.
+
+    By default torch in every worker uses all cores, so with one worker per core
+    they compete (N workers x N threads on N cores). Respects an explicit
+    ``OMP_NUM_THREADS``; the env var also reaches subprocesses the tests start.
+    """
+    workers = int(os.environ.get("PYTEST_XDIST_WORKER_COUNT") or 0)
+    if workers > 1 and "OMP_NUM_THREADS" not in os.environ:
+        threads = max(1, (os.cpu_count() or 1) // workers)
+        os.environ["OMP_NUM_THREADS"] = str(threads)
+        torch.set_num_threads(threads)
+
+
+_share_cpus_between_xdist_workers()
+
 from tests.fixtures.datasets import *
 from tests.fixtures.inference import *
 from tests.fixtures.legacy_models import *
