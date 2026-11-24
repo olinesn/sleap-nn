@@ -510,12 +510,31 @@ def robust_triangulate(
         A :class:`Triangulation`.
     """
     uv = np.asarray(uv, np.float64)
-    M, V, _ = uv.shape
-    P = np.concatenate([cams.R, cams.t[:, :, None]], 2)
+    V = uv.shape[1]
     xn = np.stack(
         [np_undistort(uv[:, v], cams.K[v], cams.dist[v]) for v in range(V)], 1
     )
+    return _robust_dlt(uv, xn, cams, drop_px, min_views)
+
+
+def _robust_dlt(
+    uv: np.ndarray,
+    xn: np.ndarray,
+    cams: CameraArrays,
+    drop_px: float = DROP_PX,
+    min_views: int = 2,
+) -> Triangulation:
+    """:func:`robust_triangulate` on rays already undistorted.
+
+    ``xn`` is ``np_undistort`` of each view of ``uv`` (``(M, V, 2)`` both).
+    Undistortion is point by point, so callers can undistort each camera's points
+    once and triangulate many combinations of them. Views no point uses are not
+    projected (their errors are NaN either way).
+    """
+    M, V, _ = uv.shape
+    P = np.concatenate([cams.R, cams.t[:, :, None]], 2)
     w = np.isfinite(xn).all(-1).astype(np.float64)
+    seen = np.nonzero(w.any(0))[0]
     X = np.full((M, 3), np.nan)
     err = np.full((M, V), np.nan)
     for _ in range(V):
@@ -524,13 +543,9 @@ def robust_triangulate(
             break
         Xs = np.full((M, 3), np.nan)
         Xs[sel] = dlt(P, xn[sel], w[sel])
-        rep = np.stack(
-            [
-                np_project(Xs, cams.K[v], cams.dist[v], cams.R[v], cams.t[v])
-                for v in range(V)
-            ],
-            1,
-        )
+        rep = np.full((M, V, 2), np.nan)
+        for v in seen:
+            rep[:, v] = np_project(Xs, cams.K[v], cams.dist[v], cams.R[v], cams.t[v])
         e = np.linalg.norm(rep - uv, axis=-1)
         e[w == 0] = np.nan
         X, err = Xs, e
@@ -605,22 +620,32 @@ def cube_centers(
 # ---------------------------------------------------------------------------------------
 
 
-def _median_distance(
+def _median_distances(
     cams: CameraArrays, v: int, X: np.ndarray, inst: np.ndarray
 ) -> np.ndarray:
-    """Median pixel distance between one animal's reprojection and each instance.
+    """Median pixel distance between animals' reprojections and each instance.
 
-    ``X`` is ``(J, 3)`` and ``inst`` ``(I, J, 2)``; returns ``(I,)`` (NaN without
-    a common node).
+    ``X`` is ``(A, J, 3)`` and ``inst`` ``(I, J, 2)``; returns ``(A, I)`` (NaN
+    without a common node).
     """
-    rp = np_project(X, cams.K[v], cams.dist[v], cams.R[v], cams.t[v])
-    d = np.linalg.norm(inst[:, :, :2] - rp[None], axis=-1)
-    d = np.where(np.isfinite(X).all(-1)[None], d, np.nan)
+    A, J = X.shape[:2]
+    rp = np_project(
+        X.reshape(-1, 3), cams.K[v], cams.dist[v], cams.R[v], cams.t[v]
+    ).reshape(A, J, 2)
+    d = np.linalg.norm(inst[None, :, :, :2] - rp[:, None], axis=-1)
+    d = np.where(np.isfinite(X).all(-1)[:, None], d, np.nan)
     import warnings
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", category=RuntimeWarning)
-        return np.nanmedian(d, 1)
+        return np.nanmedian(d, -1)
+
+
+def _median_distance(
+    cams: CameraArrays, v: int, X: np.ndarray, inst: np.ndarray
+) -> np.ndarray:
+    """:func:`_median_distances` for one animal: ``X`` ``(J, 3)``, returns ``(I,)``."""
+    return _median_distances(cams, v, X[None], inst)[0]
 
 
 def _gates(cams: CameraArrays, gate_px: float) -> np.ndarray:
@@ -676,29 +701,49 @@ def associate_frame(
     if len(ibc) < min_cams or max_animals <= 0:
         return []
     J = next(iter(ibc.values()))[0].shape[1]
+    # Each camera's detections are undistorted once (undistortion is point by point),
+    # every camera pair's candidates are triangulated in one batch, and each camera
+    # scores every proposal in one batch. The order of proposals and of the summed
+    # distances is the per-candidate loop's, so ties break the same way.
+    xn_by = {v: np_undistort(x, cams.K[v], cams.dist[v]) for v, (x, _) in ibc.items()}
+    cand = [
+        (a, b, i, j)
+        for a, b in combinations(sorted(ibc), 2)
+        for i in range(len(ibc[a][0]))
+        for j in range(len(ibc[b][0]))
+    ]
+    uv = np.full((len(cand), J, V, 2), np.nan)
+    xn = np.full((len(cand), J, V, 2), np.nan)
+    for k, (a, b, i, j) in enumerate(cand):
+        uv[k, :, a], uv[k, :, b] = ibc[a][0][i], ibc[b][0][j]
+        xn[k, :, a], xn[k, :, b] = xn_by[a][i], xn_by[b][j]
+    tr = _robust_dlt(uv.reshape(-1, V, 2), xn.reshape(-1, V, 2), cams)
+    Xc = tr.X.reshape(len(cand), J, 3)
+    ev = tr.err_views.reshape(len(cand), J, V)
+    accepted = []
+    for k, (a, b, i, j) in enumerate(cand):
+        if np.isfinite(Xc[k]).all(-1).sum() < 3:
+            continue
+        e2 = _nanmedian(_nanmean(ev[k][:, [a, b]], 1))
+        if e2 < pair_px:
+            accepted.append(k)
+    dist_by = (
+        {c: _median_distances(cams, c, Xc[accepted], ibc[c][0]) for c in ibc}
+        if accepted
+        else {}
+    )
     props = []
-    for a, b in combinations(sorted(ibc), 2):
-        xa, xb = ibc[a][0], ibc[b][0]
-        for i in range(len(xa)):
-            for j in range(len(xb)):
-                uv = np.full((J, V, 2), np.nan)
-                uv[:, a] = xa[i]
-                uv[:, b] = xb[j]
-                tr = robust_triangulate(uv, cams)
-                if np.isfinite(tr.X).all(-1).sum() < 3:
-                    continue
-                e2 = _nanmedian(_nanmean(tr.err_views[:, [a, b]], 1))
-                if not e2 < pair_px:
-                    continue
-                sup, tot = {a: i, b: j}, 0.0
-                for c in ibc:
-                    if c in (a, b):
-                        continue
-                    d = _median_distance(cams, c, tr.X, ibc[c][0])
-                    if np.isfinite(d).any() and np.nanmin(d) < gates[c]:
-                        sup[c] = int(np.nanargmin(d))
-                        tot += float(np.nanmin(d))
-                props.append((len(sup), -tot, sup))
+    for p, k in enumerate(accepted):
+        a, b, i, j = cand[k]
+        sup, tot = {a: i, b: j}, 0.0
+        for c in ibc:
+            if c in (a, b):
+                continue
+            d = dist_by[c][p]
+            if np.isfinite(d).any() and np.nanmin(d) < gates[c]:
+                sup[c] = int(np.nanargmin(d))
+                tot += float(np.nanmin(d))
+        props.append((len(sup), -tot, sup))
     animals: List[Dict[int, int]] = []
     taken = {v: set() for v in range(V)}
     for n, _, sup in sorted(props, key=lambda p: (p[0], p[1]), reverse=True):
@@ -715,9 +760,10 @@ def associate_frame(
     Xa = []
     for sup in animals:
         uv = np.full((J, V, 2), np.nan)
+        xn = np.full((J, V, 2), np.nan)
         for v, i in sup.items():
-            uv[:, v] = ibc[v][0][i]
-        Xa.append(robust_triangulate(uv, cams).X)
+            uv[:, v], xn[:, v] = ibc[v][0][i], xn_by[v][i]
+        Xa.append(_robust_dlt(uv, xn, cams).X)
     out: List[Dict[int, int]] = [dict() for _ in animals]
     for v, (inst, keep) in ibc.items():
         d = np.stack([_median_distance(cams, v, X, inst) for X in Xa])
