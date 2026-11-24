@@ -100,20 +100,33 @@ def _device(device: str) -> torch.device:
     return torch.device(device)
 
 
+def _session_frames(session: sio.RecordingSession) -> List[int]:
+    """The frames every camera's video holds, sorted.
+
+    A plain video holds ``range(len(video))``. An HDF5 video with a
+    ``frame_numbers`` table (extracted frames, as the 2026-11 study stored them)
+    holds its frame numbers, which can be sparse and run past ``len(video)``
+    (:func:`sleap_nn.data.providers.video_frame_numbers`).
+    """
+    from sleap_nn.data.providers import video_frame_numbers
+
+    held = None
+    for cam in session.camera_group.cameras:
+        video = session.get_video(cam)
+        if video is None:
+            continue
+        numbers = video_frame_numbers(video)
+        frames = set(range(len(video))) if numbers is None else set(numbers)
+        held = frames if held is None else held & frames
+    return sorted(held or ())
+
+
 def _frames_without_groups(
     session: sio.RecordingSession, frames: Optional[Sequence[int]]
 ) -> List[int]:
     have = {f for f, fg in session.frame_groups.items() if fg.instance_groups}
     if frames is None:
-        n = min(
-            (
-                len(session.get_video(c))
-                for c in session.camera_group.cameras
-                if session.get_video(c) is not None
-            ),
-            default=0,
-        )
-        frames = range(n)
+        frames = _session_frames(session)
     return [int(f) for f in frames if int(f) not in have]
 
 
@@ -244,7 +257,8 @@ def predict_volume3d(
             the volume was trained on. Another one is refused unless
             ``allow_other_ci`` (a retrained 2D model of the same rig).
         frames: Frames to process (default: every frame with instance groups, plus
-            every video frame when 2D models are given).
+            every frame all cameras' videos hold when 2D models are given; for an
+            HDF5 video with a ``frame_numbers`` table, its frame numbers).
         passes: ``"auto"`` (2 when the cube centre is not the 2D model's anchor, else
             1), 1 or 2.
         max_animals: Most animals per frame when matching across cameras.

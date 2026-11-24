@@ -243,6 +243,92 @@ def test_2d_path_runs_on_a_session_without_groups(trained, tmp_path):
         assert set(sv.frames.tolist()) <= {0, 1}
 
 
+def _frame_numbered_session(path, out_dir, numbers_by_cam):
+    """The session at ``path`` with each camera's video rewritten as an HDF5 file of
+    PNG-encoded frames plus a ``frame_numbers`` table (stored image ``i`` is frame
+    ``numbers[i]``), as the 2026-11 study stored its sampled frames. No groups."""
+    import cv2
+
+    src = sio.load_slp(str(path)).sessions[0]
+    out_dir.mkdir(parents=True, exist_ok=True)
+    cams, videos = [], []
+    for cam in src.camera_group.cameras:
+        numbers = numbers_by_cam.get(cam.name, numbers_by_cam["*"])
+        video = src.get_video(cam)
+        h5 = out_dir / f"{cam.name}.h5"
+        with h5py.File(h5, "w") as f:
+            ds = f.create_dataset(
+                "video",
+                (len(numbers),),
+                dtype=h5py.special_dtype(vlen=np.dtype("uint8")),
+            )
+            for i in range(len(numbers)):
+                ok, buf = cv2.imencode(".png", np.asarray(video[i]).squeeze())
+                assert ok
+                ds[i] = buf.ravel()
+            ds.attrs["format"] = "png"
+            ds.attrs["channel_order"] = "BGR"
+            f.create_dataset("frame_numbers", data=np.asarray(numbers))
+        cams.append(
+            sio.Camera(
+                matrix=cam.matrix,
+                dist=cam.dist,
+                size=cam.size,
+                rvec=cam.rvec,
+                tvec=cam.tvec,
+                name=cam.name,
+            )
+        )
+        videos.append(sio.Video.from_filename(str(h5), dataset="video"))
+    session = sio.RecordingSession(
+        camera_group=sio.CameraGroup(cameras=cams), metadata=dict(src.metadata)
+    )
+    for cam, video in zip(cams, videos):
+        session.add_video(video, cam)
+    labels = sio.Labels(videos=videos, sessions=[session])
+    labels.save(str(out_dir / "session.slp"))
+    return sio.load_slp(str(out_dir / "session.slp"))
+
+
+def test_default_frames_are_the_frames_every_camera_holds(trained, tmp_path):
+    """A plain video holds range(len(video)); a frame-numbered HDF5 video holds its
+    frame numbers, which run past len(video). The default is what all cameras hold."""
+    from sleap_nn.inference.volume import _frames_without_groups, _session_frames
+
+    _, path, _ = trained
+    assert _session_frames(sio.load_slp(str(path)).sessions[0]) == list(range(6))
+    numbers = [3, 18, 33, 48, 63, 78]
+    labels = _frame_numbered_session(path, tmp_path / "same", {"*": numbers})
+    assert len(labels.videos[0]) == 6
+    assert _frames_without_groups(labels.sessions[0], None) == numbers
+    cam0 = labels.sessions[0].camera_group.cameras[0].name
+    mixed = _frame_numbered_session(
+        path, tmp_path / "mixed", {"*": numbers, cam0: [3, 18, 33, 48, 63, 93]}
+    )
+    assert _frames_without_groups(mixed.sessions[0], None) == [3, 18, 33, 48, 63]
+    # an explicit list is used as given (minus frames with groups)
+    assert _frames_without_groups(labels.sessions[0], [78, 3]) == [78, 3]
+
+
+def test_2d_path_on_frame_numbered_videos(trained, tmp_path):
+    """With no frames given, the 2D models run on the videos' frame numbers."""
+    model, path, _ = trained
+    numbers = [3, 18, 33, 48, 63, 78]
+    labels = _frame_numbered_session(path, tmp_path / "h5", {"*": numbers})
+    pred = predict_volume3d(
+        labels,
+        str(model),
+        centroid_model="tests/assets/model_ckpts/minimal_instance_centroid",
+        max_animals=2,
+        device="cpu",
+    )
+    ran = {int(lf.frame_idx) for lf in labels.labeled_frames}
+    assert ran and ran <= set(numbers)
+    assert max(ran) >= len(labels.videos[0])  # frame numbers past len(video) ran
+    for sv in pred.sessions:
+        assert set(sv.frames.tolist()) <= set(numbers)
+
+
 def test_sample_config_is_valid():
     from omegaconf import OmegaConf
 
