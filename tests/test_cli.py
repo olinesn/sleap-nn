@@ -7,7 +7,7 @@ from omegaconf import OmegaConf
 import os
 import subprocess
 import sys
-from tests.utils.cli import cpu_only_env, sleap_nn_cli
+from tests.utils.cli import cpu_only_env, run_cli, sleap_nn_cli
 from click.testing import CliRunner
 from sleap_nn.legacy_predict import run_inference
 from sleap_nn.cli import (
@@ -958,7 +958,7 @@ def test_main_cli(sample_config, tmp_path):
         "train",
         "--help",
     ]
-    result = subprocess.run(
+    result = run_cli(
         cmd,
         capture_output=True,
         text=True,
@@ -990,7 +990,7 @@ def test_main_cli(sample_config, tmp_path):
         "--config-name",
         "test_config",
     ]
-    result = subprocess.run(
+    result = run_cli(
         cmd,
         capture_output=True,
         text=True,
@@ -1023,7 +1023,7 @@ def test_main_cli(sample_config, tmp_path):
         "trainer_config.max_epochs=2",
         "data_config.preprocessing.scale=1.2",
     ]
-    result = subprocess.run(
+    result = run_cli(
         cmd,
         capture_output=True,
         text=True,
@@ -1051,7 +1051,7 @@ def test_main_cli(sample_config, tmp_path):
         "trainer_config.max_epochs=1",
         "data_config.preprocessing.scale=1.5",
     ]
-    result = subprocess.run(
+    result = run_cli(
         cmd,
         capture_output=True,
         text=True,
@@ -1100,7 +1100,7 @@ def test_train_cli_with_video_paths(
         "--video-paths",
         f"{small_robot_minimal_video.as_posix()}",
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True, env=cpu_only_env())
+    result = run_cli(cmd, capture_output=True, text=True, env=cpu_only_env())
     assert result.returncode == 0
 
     assert (
@@ -1130,7 +1130,7 @@ def test_train_cli_with_video_paths(
         f"{video_path}",
         f"{small_robot_minimal_video.as_posix()}",
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True, env=cpu_only_env())
+    result = run_cli(cmd, capture_output=True, text=True, env=cpu_only_env())
     assert result.returncode == 0
 
     assert (
@@ -1174,7 +1174,7 @@ def test_train_cli_with_prefix_map(
         f"{old_prefix}",
         f"{new_prefix}",
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True, env=cpu_only_env())
+    result = run_cli(cmd, capture_output=True, text=True, env=cpu_only_env())
     assert result.returncode == 0, f"stderr: {result.stderr}"
 
     assert (
@@ -1212,7 +1212,7 @@ def test_track_command(
         "--device",
         "cpu",
     ]
-    result = subprocess.run(
+    result = run_cli(
         cmd, check=True, capture_output=True, text=True, env=cpu_only_env()
     )
     assert Path(f"{tmp_path}/test.slp").exists()
@@ -1250,7 +1250,7 @@ def test_track_command_retrack_only_uses_new_flow(
         "--device",
         "cpu",
     ]
-    subprocess.run(
+    run_cli(
         inference_cmd, check=True, capture_output=True, text=True, env=cpu_only_env()
     )
     assert Path(pred_slp).exists()
@@ -1268,9 +1268,7 @@ def test_track_command_retrack_only_uses_new_flow(
         "--output_path",
         retracked_slp,
     ]
-    subprocess.run(
-        retrack_cmd, check=True, capture_output=True, text=True, env=cpu_only_env()
-    )
+    run_cli(retrack_cmd, check=True, capture_output=True, text=True, env=cpu_only_env())
     assert Path(retracked_slp).exists()
 
     out = sio.load_slp(retracked_slp)
@@ -1308,7 +1306,7 @@ def test_track_command_with_tracking_uses_new_flow(
         "--device",
         "cpu",
     ]
-    subprocess.run(cmd, check=True, capture_output=True, text=True, env=cpu_only_env())
+    run_cli(cmd, check=True, capture_output=True, text=True, env=cpu_only_env())
     out = Path(f"{tmp_path}/test_tracked.slp")
     assert out.exists()
 
@@ -1347,7 +1345,7 @@ def test_eval_command(
         f"{tmp_path}/metrics_test.npz",
     ]
     # Run the command and check for errors
-    result = subprocess.run(
+    result = run_cli(
         cmd, check=True, capture_output=True, text=True, env=cpu_only_env()
     )
     assert Path(f"{tmp_path}/metrics_test.npz").exists()
@@ -1365,6 +1363,9 @@ class TestTrainDryRun:
         config_path = tmp_path / "config.yaml"
         OmegaConf.save(sample_config, config_path.as_posix())
 
+        # A real `python -m sleap_nn.cli` process on purpose (most CLI tests run
+        # in-process via run_cli): covers the `__main__` entry point, the exit code
+        # of a real process, and logging through a real pipe (cp1252 on Windows).
         result = subprocess.run(
             [*sleap_nn_cli(), "train", config_path.as_posix(), "--dry-run"],
             capture_output=True,
@@ -1388,7 +1389,7 @@ class TestTrainDryRun:
         config_path = tmp_path / "config.yaml"
         OmegaConf.save(sample_config, config_path.as_posix())
 
-        result = subprocess.run(
+        result = run_cli(
             [*sleap_nn_cli(), "train", config_path.as_posix(), "--dry-run"],
             capture_output=True,
             text=True,
@@ -1556,7 +1557,7 @@ class TestTrainLabelsOption:
         config_path = tmp_path / "config.yaml"
         OmegaConf.save(sample_config, config_path.as_posix())
 
-        result = subprocess.run(
+        result = run_cli(
             [
                 *sleap_nn_cli(),
                 "train",
@@ -1624,7 +1625,7 @@ class TestTrainResume:
 
     @staticmethod
     def _train(cmd_args):
-        result = subprocess.run(
+        result = run_cli(
             [*sleap_nn_cli(), "train", *cmd_args],
             capture_output=True,
             text=True,
@@ -1678,7 +1679,7 @@ class TestTrainResume:
         assert (ckpt_dir / "orig-2" / "best.ckpt").is_file()
 
         # A checkpoint that already reached max_epochs has nothing left to train.
-        result = subprocess.run(
+        result = run_cli(
             [*sleap_nn_cli(), "train", "--resume", best.as_posix()],
             capture_output=True,
             text=True,

@@ -458,13 +458,20 @@ def sample_cfg(minimal_instance, tmp_path):
     return config
 
 
-@pytest.mark.skipif(
+# Skip on CPU-only Linux: "Flaky test (The training test runs on Ubuntu for a
+# long time: >6hrs and then fails.)". Self-hosted GPU Linux runners still run them.
+_skip_on_linux_cpu = pytest.mark.skipif(
     sys.platform.startswith("li")
     and not torch.cuda.is_available(),  # self-hosted GPUs have linux os but cuda is available, so will do test
     reason="Flaky test (The training test runs on Ubuntu for a long time: >6hrs and then fails.)",
 )
-def test_train_method(minimal_instance, tmp_path: str):
-    # test with caching and num_workers > 0
+
+
+# test_train() end to end, one case per test so pytest-xdist can spread them over
+# workers (as one test they took ~3 minutes on the macOS runner).
+@_skip_on_linux_cpu
+def test_train_caching_and_workers(minimal_instance, tmp_path):
+    """Disk image cache with two loader workers; writes checkpoint and predictions."""
     train(
         train_labels_path=[minimal_instance],
         val_labels_path=[minimal_instance],
@@ -494,7 +501,10 @@ def test_train_method(minimal_instance, tmp_path: str):
         (Path(tmp_path) / "test_train_method").joinpath("labels_pr.test.0.slp").exists()
     )
 
-    # with no val labels path
+
+@_skip_on_linux_cpu
+def test_train_without_val_labels(minimal_instance, tmp_path):
+    """With no val labels, a validation fraction is split off the training labels."""
     train(
         train_labels_path=[minimal_instance],
         val_labels_path=[],
@@ -509,76 +519,84 @@ def test_train_method(minimal_instance, tmp_path: str):
         run_name="test_train_method",
         min_train_steps_per_epoch=1,
     )
-    folder_created = (Path(tmp_path) / "test_train_method-1").exists()
+    folder_created = (Path(tmp_path) / "test_train_method").exists()
     assert folder_created
     assert (
-        (Path(tmp_path) / "test_train_method-1")
-        .joinpath("training_config.yaml")
-        .exists()
+        (Path(tmp_path) / "test_train_method").joinpath("training_config.yaml").exists()
     )
-    assert (Path(tmp_path) / "test_train_method-1").joinpath("best.ckpt").exists()
+    assert (Path(tmp_path) / "test_train_method").joinpath("best.ckpt").exists()
     assert (
-        (Path(tmp_path) / "test_train_method-1")
+        (Path(tmp_path) / "test_train_method")
         .joinpath("labels_pr.train.0.slp")
         .exists()
     )
     assert (
-        (Path(tmp_path) / "test_train_method-1")
-        .joinpath("labels_pr.test.0.slp")
-        .exists()
+        (Path(tmp_path) / "test_train_method").joinpath("labels_pr.test.0.slp").exists()
     )
 
-    # convnext and swint backbone tests - skip on MPS (slow on CPU, tested on other platforms)
-    if not torch.mps.is_available():
-        train(
-            train_labels_path=[minimal_instance],
-            val_labels_path=[minimal_instance],
-            test_file_path=str(minimal_instance),
-            max_epochs=1,
-            trainer_accelerator="auto",
-            trainer_num_devices=1,
-            backbone_config="convnext",
-            head_configs="centered_instance",
-            save_ckpt=True,
-            ckpt_dir=Path(tmp_path).as_posix(),
-            run_name="test_convnext",
-            min_train_steps_per_epoch=1,
-        )
-        folder_created = (Path(tmp_path) / "test_convnext").exists()
-        assert folder_created
-        assert (
-            (Path(tmp_path) / "test_convnext").joinpath("training_config.yaml").exists()
-        )
-        assert (Path(tmp_path) / "test_convnext").joinpath("best.ckpt").exists()
-        assert (
-            (Path(tmp_path) / "test_convnext").joinpath("labels_pr.val.0.slp").exists()
-        )
-        assert (
-            (Path(tmp_path) / "test_convnext").joinpath("labels_pr.test.0.slp").exists()
-        )
 
-        train(
-            train_labels_path=[minimal_instance],
-            val_labels_path=[minimal_instance],
-            test_file_path=str(minimal_instance),
-            max_epochs=1,
-            trainer_accelerator="auto",
-            trainer_num_devices=1,
-            backbone_config="swint",
-            head_configs="centered_instance",
-            save_ckpt=True,
-            ckpt_dir=Path(tmp_path).as_posix(),
-            run_name="test_swint",
-            min_train_steps_per_epoch=1,
-        )
-        folder_created = (Path(tmp_path) / "test_swint").exists()
-        assert folder_created
-        assert (Path(tmp_path) / "test_swint").joinpath("training_config.yaml").exists()
-        assert (Path(tmp_path) / "test_swint").joinpath("best.ckpt").exists()
-        assert (Path(tmp_path) / "test_swint").joinpath("labels_pr.val.0.slp").exists()
-        assert (Path(tmp_path) / "test_swint").joinpath("labels_pr.test.0.slp").exists()
+@pytest.mark.skipif(
+    sys.platform == "darwin",
+    reason="Slow on the macOS CPU runner; covered on Windows (and CUDA Linux).",
+)
+@_skip_on_linux_cpu
+def test_train_convnext_backbone(minimal_instance, tmp_path):
+    """Trains a ConvNeXt backbone end to end."""
+    train(
+        train_labels_path=[minimal_instance],
+        val_labels_path=[minimal_instance],
+        test_file_path=str(minimal_instance),
+        max_epochs=1,
+        trainer_accelerator="auto",
+        trainer_num_devices=1,
+        backbone_config="convnext",
+        head_configs="centered_instance",
+        save_ckpt=True,
+        ckpt_dir=Path(tmp_path).as_posix(),
+        run_name="test_convnext",
+        min_train_steps_per_epoch=1,
+    )
+    folder_created = (Path(tmp_path) / "test_convnext").exists()
+    assert folder_created
+    assert (Path(tmp_path) / "test_convnext").joinpath("training_config.yaml").exists()
+    assert (Path(tmp_path) / "test_convnext").joinpath("best.ckpt").exists()
+    assert (Path(tmp_path) / "test_convnext").joinpath("labels_pr.val.0.slp").exists()
+    assert (Path(tmp_path) / "test_convnext").joinpath("labels_pr.test.0.slp").exists()
 
-    # test for multiple slp files (use unet on MPS for speed)
+
+@pytest.mark.skipif(
+    sys.platform == "darwin",
+    reason="Slow on the macOS CPU runner; covered on Windows (and CUDA Linux).",
+)
+@_skip_on_linux_cpu
+def test_train_swint_backbone(minimal_instance, tmp_path):
+    """Trains a Swin Transformer backbone end to end."""
+    train(
+        train_labels_path=[minimal_instance],
+        val_labels_path=[minimal_instance],
+        test_file_path=str(minimal_instance),
+        max_epochs=1,
+        trainer_accelerator="auto",
+        trainer_num_devices=1,
+        backbone_config="swint",
+        head_configs="centered_instance",
+        save_ckpt=True,
+        ckpt_dir=Path(tmp_path).as_posix(),
+        run_name="test_swint",
+        min_train_steps_per_epoch=1,
+    )
+    folder_created = (Path(tmp_path) / "test_swint").exists()
+    assert folder_created
+    assert (Path(tmp_path) / "test_swint").joinpath("training_config.yaml").exists()
+    assert (Path(tmp_path) / "test_swint").joinpath("best.ckpt").exists()
+    assert (Path(tmp_path) / "test_swint").joinpath("labels_pr.val.0.slp").exists()
+    assert (Path(tmp_path) / "test_swint").joinpath("labels_pr.test.0.slp").exists()
+
+
+@_skip_on_linux_cpu
+def test_train_multiple_slp_files(minimal_instance, tmp_path):
+    """Several train and val files each get their own predictions file."""
+    # multiple slp files (unet on macOS for speed)
     train(
         train_labels_path=[minimal_instance, minimal_instance, minimal_instance],
         val_labels_path=[minimal_instance, minimal_instance, minimal_instance],
@@ -586,7 +604,7 @@ def test_train_method(minimal_instance, tmp_path: str):
         max_epochs=1,
         trainer_accelerator="cpu" if torch.mps.is_available() else "auto",
         trainer_num_devices=1,
-        backbone_config="unet" if torch.mps.is_available() else "swint",
+        backbone_config="unet" if sys.platform == "darwin" else "swint",
         head_configs="centered_instance",
         save_ckpt=True,
         ckpt_dir=Path(tmp_path).as_posix(),
@@ -611,7 +629,10 @@ def test_train_method(minimal_instance, tmp_path: str):
     )
     assert (Path(tmp_path) / "test_multi_slp").joinpath("labels_pr.test.0.slp").exists()
 
-    # with augmentations
+
+@_skip_on_linux_cpu
+def test_train_rejects_unknown_augmentations(minimal_instance, tmp_path):
+    """Unknown augmentation names raise ValueError."""
     with pytest.raises(ValueError):
         train(
             train_labels_path=[minimal_instance],
@@ -646,6 +667,10 @@ def test_train_method(minimal_instance, tmp_path: str):
             min_train_steps_per_epoch=1,
         )
 
+
+@_skip_on_linux_cpu
+def test_train_augmentation_lists(minimal_instance, tmp_path):
+    """Augmentations named in lists switch on with probability 1."""
     train(
         train_labels_path=[minimal_instance],
         val_labels_path=[minimal_instance],
@@ -671,6 +696,10 @@ def test_train_method(minimal_instance, tmp_path: str):
     assert config.data_config.augmentation_config.geometric.rotation_p == 1.0
     assert config.data_config.augmentation_config.geometric.scale_p == 1.0
 
+
+@_skip_on_linux_cpu
+def test_train_augmentation_strings(minimal_instance, tmp_path):
+    """Augmentations named by single strings switch on with probability 1."""
     train(
         train_labels_path=[minimal_instance],
         val_labels_path=[minimal_instance],
@@ -687,7 +716,7 @@ def test_train_method(minimal_instance, tmp_path: str):
         min_train_steps_per_epoch=1,
     )
 
-    config = OmegaConf.load(f"{tmp_path}/test_aug-1/training_config.yaml")
+    config = OmegaConf.load(f"{tmp_path}/test_aug/training_config.yaml")
     assert config.data_config.augmentation_config.intensity.uniform_noise_p == 0.0
     assert config.data_config.augmentation_config.intensity.brightness_p == 1.0
     # Check individual augmentation probabilities (new independent probability system)
@@ -695,7 +724,10 @@ def test_train_method(minimal_instance, tmp_path: str):
     assert config.data_config.augmentation_config.geometric.erase_p == 1.0
     assert config.data_config.augmentation_config.geometric.mixup_p == 1.0
 
-    ## test with passing dicts for aug
+
+@_skip_on_linux_cpu
+def test_train_augmentation_dicts(minimal_instance, tmp_path):
+    """Augmentations given as dicts of settings are applied as given."""
     train(
         train_labels_path=[minimal_instance],
         val_labels_path=[minimal_instance],
@@ -716,12 +748,15 @@ def test_train_method(minimal_instance, tmp_path: str):
         min_train_steps_per_epoch=1,
     )
 
-    config = OmegaConf.load(f"{tmp_path}/test_aug-2/training_config.yaml")
+    config = OmegaConf.load(f"{tmp_path}/test_aug/training_config.yaml")
     assert config.data_config.augmentation_config.intensity.uniform_noise_p == 1.0
     assert config.data_config.augmentation_config.geometric.affine_p == 1.0
     assert config.data_config.augmentation_config.geometric.rotation_max == 180.0
 
-    # backbone configs #TODO
+
+@_skip_on_linux_cpu
+def test_train_rejects_unknown_backbone(minimal_instance, tmp_path):
+    """An unknown backbone name raises ValueError."""
     with pytest.raises(ValueError):
         train(
             train_labels_path=[minimal_instance],
@@ -737,6 +772,10 @@ def test_train_method(minimal_instance, tmp_path: str):
             min_train_steps_per_epoch=1,
         )
 
+
+@_skip_on_linux_cpu
+def test_train_custom_backbone_dict(minimal_instance, tmp_path):
+    """A backbone given as a dict of settings is used as given."""
     train(
         train_labels_path=[minimal_instance],
         val_labels_path=[minimal_instance],
@@ -769,7 +808,10 @@ def test_train_method(minimal_instance, tmp_path: str):
     config = OmegaConf.load(f"{tmp_path}/test_custom_backbone/training_config.yaml")
     assert config.model_config.backbone_config.unet.max_stride == 8
 
-    # head configs
+
+@_skip_on_linux_cpu
+def test_train_rejects_unknown_head(minimal_instance, tmp_path):
+    """An unknown head name raises ValueError."""
     with pytest.raises(ValueError):
         train(
             train_labels_path=[minimal_instance],
@@ -785,6 +827,10 @@ def test_train_method(minimal_instance, tmp_path: str):
             min_train_steps_per_epoch=1,
         )
 
+
+@_skip_on_linux_cpu
+def test_train_head_dict_centroid(minimal_instance, tmp_path):
+    """Head configs given as a dict keep only the head that has settings."""
     train(
         train_labels_path=[minimal_instance],
         val_labels_path=[minimal_instance],
@@ -829,6 +875,10 @@ def test_train_method(minimal_instance, tmp_path: str):
     # assert config.model_config.head_configs.single_instance is not None
     # assert config.model_config.head_configs.bottomup is None
 
+
+@_skip_on_linux_cpu
+def test_train_bottomup_head(minimal_instance, tmp_path):
+    """Trains a bottom-up model."""
     train(
         train_labels_path=[minimal_instance],
         val_labels_path=[minimal_instance],
@@ -848,7 +898,10 @@ def test_train_method(minimal_instance, tmp_path: str):
     assert config.model_config.head_configs.bottomup is not None
     assert config.model_config.head_configs.centroid is None
 
-    ## pass dict for head_configs
+
+@_skip_on_linux_cpu
+def test_train_custom_head_dict(minimal_instance, tmp_path):
+    """A centered-instance head given as a dict of settings."""
     train(
         train_labels_path=[minimal_instance],
         val_labels_path=[minimal_instance],
@@ -875,7 +928,10 @@ def test_train_method(minimal_instance, tmp_path: str):
     assert config.model_config.head_configs.centered_instance is not None
     assert config.model_config.head_configs.centroid is None
 
-    ## invalid scheduler
+
+@_skip_on_linux_cpu
+def test_train_rejects_unknown_scheduler(minimal_instance, tmp_path):
+    """Unknown learning-rate scheduler names raise ValueError."""
     with pytest.raises(ValueError):
         train(
             train_labels_path=[minimal_instance],
@@ -886,7 +942,25 @@ def test_train_method(minimal_instance, tmp_path: str):
             lr_scheduler="invalid_scheduler",
         )
 
-    ## pass dict for scheduler
+    with pytest.raises(ValueError):
+        train(
+            train_labels_path=[minimal_instance],
+            val_labels_path=[minimal_instance],
+            max_epochs=1,
+            trainer_accelerator="cpu" if torch.mps.is_available() else "auto",
+            trainer_num_devices=1,
+            head_configs="centered_instance",
+            save_ckpt=False,
+            ckpt_dir=Path(tmp_path).as_posix(),
+            run_name="test_invalid_sch",
+            lr_scheduler="red_lr",
+            min_train_steps_per_epoch=1,
+        )
+
+
+@_skip_on_linux_cpu
+def test_train_scheduler_dict(minimal_instance, tmp_path):
+    """A step_lr scheduler given as a dict of settings."""
     train(
         train_labels_path=[minimal_instance],
         val_labels_path=[minimal_instance],
@@ -909,7 +983,10 @@ def test_train_method(minimal_instance, tmp_path: str):
     config = OmegaConf.load(f"{tmp_path}/test_scheduler/training_config.yaml")
     assert config.trainer_config.lr_scheduler.step_lr.step_size == 10
 
-    ## reduce lr on plateau
+
+@_skip_on_linux_cpu
+def test_train_reduce_lr_on_plateau_dict(minimal_instance, tmp_path):
+    """A reduce_lr_on_plateau scheduler given as a dict of settings."""
     train(
         train_labels_path=[minimal_instance],
         val_labels_path=[minimal_instance],
@@ -938,22 +1015,6 @@ def test_train_method(minimal_instance, tmp_path: str):
     )
     config = OmegaConf.load(f"{tmp_path}/test_reducelr_scheduler/training_config.yaml")
     assert config.trainer_config.lr_scheduler.reduce_lr_on_plateau.threshold == 1e-5
-
-    ## invalid scheduler
-    with pytest.raises(ValueError):
-        train(
-            train_labels_path=[minimal_instance],
-            val_labels_path=[minimal_instance],
-            max_epochs=1,
-            trainer_accelerator="cpu" if torch.mps.is_available() else "auto",
-            trainer_num_devices=1,
-            head_configs="centered_instance",
-            save_ckpt=False,
-            ckpt_dir=Path(tmp_path).as_posix(),
-            run_name="test_invalid_sch",
-            lr_scheduler="red_lr",
-            min_train_steps_per_epoch=1,
-        )
 
 
 @pytest.mark.skipif(

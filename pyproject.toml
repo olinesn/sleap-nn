@@ -149,6 +149,7 @@ dev = [
     "build",
     "ipython",
     "ruff",
+    "pytest-xdist>=3.8.0",
 ]
 docs = [
     "mkdocs",
